@@ -42,6 +42,10 @@
         "label": "Save to Storage…"
       },
       {
+        "id": "save-to-cloud",
+        "label": "Save to Cloud…"
+      },
+      {
         "type": "separator"
       },
       {
