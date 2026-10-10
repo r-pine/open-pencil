@@ -33,6 +33,8 @@ export type CollabRoomConnection = {
   onPeerLeave: (handler: (peerId: string) => void) => () => void
   /** The peer whose awareness carries a presence client, so media reaches the right person. */
   peerForClient: (clientId: number) => string | undefined
+  /** Follow peers answering this tab's state with theirs; returns the unsubscribe. */
+  onSynced: (handler: (peerId: string) => void) => () => void
 }
 
 type AwarenessEntry = { clientId: number; removed: boolean }
@@ -93,6 +95,7 @@ export function connectCollabRoom({
   const agentPreview = room.makeAction(COLLAB_ACTIONS.agentPreview)
   // A transport keeps one leave handler, so the connection shares it with its users.
   const leaveHandlers = new Set<(peerId: string) => void>()
+  const syncedHandlers = new Set<(peerId: string) => void>()
 
   const awarenessClientsByPeer = new Map<string, Set<number>>()
 
@@ -116,7 +119,8 @@ export function connectCollabRoom({
   })
 
   getSyncReply((data, peerId) => {
-    applyRemote(ydoc, data, { limit: maxMessageBytes, peerId, compressed: true })
+    if (!applyRemote(ydoc, data, { limit: maxMessageBytes, peerId, compressed: true })) return
+    for (const handler of syncedHandlers) handler(peerId)
   })
 
   ydoc.on('updateV2', (update: Uint8Array, origin: unknown) => {
@@ -159,6 +163,10 @@ export function connectCollabRoom({
     onPeerLeave(handler) {
       leaveHandlers.add(handler)
       return () => leaveHandlers.delete(handler)
+    },
+    onSynced(handler) {
+      syncedHandlers.add(handler)
+      return () => syncedHandlers.delete(handler)
     },
     peerForClient(clientId) {
       for (const [peerId, clients] of awarenessClientsByPeer) {
