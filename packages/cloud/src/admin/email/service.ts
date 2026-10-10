@@ -17,7 +17,7 @@ const ENROLLMENT_MESSAGE_STATUS: Partial<Record<string, EnrollmentStatus>> = {
 export function createAdminEmailService(
   database: Kysely<CloudDatabase>,
   email?: TransactionalEmailService,
-  appURL = ''
+  links: { appURL: string; portalURL: string } = { appURL: '', portalURL: '' }
 ) {
   return {
     async list(limit = 100) {
@@ -80,7 +80,10 @@ export function createAdminEmailService(
             recipientEmail: enrollment.emailNormalized,
             payload: {
               name: enrollment.name ?? 'there',
-              actionURL: kind === 'enrollment-approved' ? appURL : `${appURL}/auth/sign-in`
+              actionURL:
+                kind === 'enrollment-approved'
+                  ? links.appURL
+                  : new URL('/auth/sign-in', links.portalURL).href
             }
           },
           transaction
