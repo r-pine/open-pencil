@@ -331,7 +331,9 @@ jobs:
         run: bun run build:packages
 
       - name: Run Cloud end-to-end tests against ${{ matrix.store }}
-        run: bun --filter @open-pencil/cloud ${{ matrix.script }}
+        env:
+          CLOUD_E2E_SCRIPT: ${{ matrix.script }}
+        run: bun --filter @open-pencil/cloud "$CLOUD_E2E_SCRIPT"
 
   result:
     name: CI result
