@@ -66,6 +66,7 @@ function joinCloudRelayRoom(roomId: string, options: CloudRelayOptions): CollabR
   let left = false
   let attempt = 0
   let refreshTimer: ReturnType<typeof setTimeout> | undefined
+  let ticketExpiresAt = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
 
   function send(frame: RelayClientFrame) {
@@ -80,11 +81,16 @@ function joinCloudRelayRoom(roomId: string, options: CloudRelayOptions): CollabR
       scheduleRefresh(next)
     } catch (error) {
       report('Refreshing the collaboration ticket failed:', error)
+      // Try again while the current ticket still holds, rather than wait for the relay to drop us.
+      if (!left && ticketExpiresAt - Date.now() > MINIMUM_REFRESH_MS) {
+        refreshTimer = setTimeout(() => void refresh(), MINIMUM_REFRESH_MS)
+      }
     }
   }
 
   function scheduleRefresh(ticket: CloudRelayTicket) {
     clearTimeout(refreshTimer)
+    ticketExpiresAt = Date.parse(ticket.expiresAt)
     const delay = Math.max(
       MINIMUM_REFRESH_MS,
       Date.parse(ticket.expiresAt) - Date.now() - TICKET_REFRESH_LEAD_MS
@@ -144,11 +150,15 @@ function joinCloudRelayRoom(roomId: string, options: CloudRelayOptions): CollabR
     const next = createSocket(options.url)
     next.binaryType = 'arraybuffer'
     socket = next
+    // A socket that was replaced or left behind by `leave()` no longer speaks for this room.
     next.addEventListener('open', () => {
+      if (socket !== next) return
       send({ type: 'auth', token: ticket.token })
       scheduleRefresh(ticket)
     })
-    next.addEventListener('message', (event: MessageEvent<ArrayBuffer>) => handleFrame(event.data))
+    next.addEventListener('message', (event: MessageEvent<ArrayBuffer>) => {
+      if (socket === next) handleFrame(event.data)
+    })
     next.addEventListener('close', (event) => {
       if (socket !== next) return
       socket = null

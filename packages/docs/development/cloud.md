@@ -69,7 +69,7 @@ capability secret keeps the current epoch; revoking access advances it so old ti
 ## Live collaboration
 
 Collaboration in the editor runs Yjs sync and awareness over a `CollabRoomTransport`. Local
-documents use Trystero peer to peer; Cloud documents use the Cloud relay, a WebSocket endpoint at
+documents use Trystero peer-to-peer; Cloud documents use the Cloud relay, a WebSocket endpoint at
 `/api/collaboration/relay` on the API origin. Both carry the same room messages, so the editor has
 one sync implementation.
 

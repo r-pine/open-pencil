@@ -214,8 +214,10 @@ export function createCollaborationRelay(options: CollaborationRelayOptions) {
     socket: RelaySocket,
     authorization: RelayAuthorization
   ): Promise<Peer | null> {
-    const room = await openRoom(authorization)
     const limit = await options.maximumParticipants?.(authorization.documentId)
+    let room = await openRoom(authorization)
+    // The room's last peer may have left while it opened; a closed room takes no newcomers.
+    while (rooms.get(room.id) !== room) room = await openRoom(authorization)
     const capacity = Math.min(limit ?? Number.POSITIVE_INFINITY, options.maximumConnectionsPerRoom)
     if (room.peers.size >= capacity) {
       socket.close(RELAY_CLOSE.roomFull, 'Collaboration room is full')

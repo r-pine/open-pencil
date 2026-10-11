@@ -236,6 +236,47 @@ describe('collaboration relay', () => {
     await second.close()
   })
 
+  test('admits a newcomer to the live room when the last peer leaves while it is checked', async () => {
+    let releaseLimit: (() => void) | undefined
+    let checks = 0
+    const hub = relay({
+      async maximumParticipants() {
+        checks++
+        if (checks === 2) {
+          await new Promise<void>((resolve) => {
+            releaseLimit = resolve
+          })
+        }
+        return 10
+      }
+    })
+    const alice = await join(hub.relay)
+    alice.send({
+      type: 'message',
+      namespace: COLLAB_ACTIONS.yjsUpdate,
+      target: null,
+      payload: edit('kept')
+    })
+    const bobJoining = join(hub.relay, { permission: 'view' })
+    await until(() => releaseLimit !== undefined)
+    alice.connection.closed()
+    await until(() => hub.states.size > 0)
+    releaseLimit?.()
+
+    const bob = await bobJoining
+    bob.send({
+      type: 'message',
+      namespace: COLLAB_ACTIONS.syncStep1,
+      target: RELAY_SERVER_PEER,
+      payload: Y.encodeStateVector(new Y.Doc())
+    })
+    await until(() => bob.messages(COLLAB_ACTIONS.syncReply).length > 0 || bob.closed !== null)
+    expect(bob.closed).toBeNull()
+    expect(textOf(bob.messages(COLLAB_ACTIONS.syncReply)[0]?.payload ?? new Uint8Array())).toBe(
+      'kept'
+    )
+  })
+
   test('refuses sockets without a valid ticket for the room', async () => {
     const { relay: hub } = relay({ authTimeoutMs: 5 })
     const silent = connectTestClient((socket) => hub.connect(socket))

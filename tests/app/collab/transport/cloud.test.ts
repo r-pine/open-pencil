@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, jest, test } from 'bun:test'
 
 import {
   decodeRelayClientFrame,
@@ -43,7 +43,7 @@ async function settle() {
   for (let index = 0; index < 5; index++) await Promise.resolve()
 }
 
-function room() {
+function room(options: { failTicket?: (attempt: number) => boolean } = {}) {
   const sockets: FakeSocket[] = []
   let tickets = 0
   const errors: unknown[] = []
@@ -51,6 +51,7 @@ function room() {
     url: 'wss://cloud.example.com/api/collaboration/relay',
     ticket: async () => {
       tickets += 1
+      if (options.failTicket?.(tickets)) throw new Error('Ticket endpoint unavailable')
       return { token: `ticket-${tickets}`, expiresAt: new Date(Date.now() + 300_000).toISOString() }
     },
     createSocket: () => {
@@ -163,5 +164,37 @@ describe('Cloud relay transport', () => {
       setTimeout(resolve, 0)
     })
     expect(sockets).toHaveLength(1)
+  })
+
+  test('retries a failed ticket refresh while the current ticket still holds', async () => {
+    jest.useFakeTimers()
+    try {
+      const { transport, sockets, errors } = room({ failTicket: (attempt) => attempt === 2 })
+      await settle()
+      sockets[0]?.open()
+      // The first refresh comes a minute before the five-minute ticket expires, and fails.
+      jest.advanceTimersByTime(240_000)
+      await settle()
+      expect(errors).toHaveLength(1)
+      jest.advanceTimersByTime(5_000)
+      await settle()
+      const auths = sockets[0]?.sent.filter((frame) => frame.type === 'auth')
+      expect(auths?.map((frame) => (frame.type === 'auth' ? frame.token : ''))).toEqual([
+        'ticket-1',
+        'ticket-3'
+      ])
+      await transport.leave()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  test('ignores frames from a socket it left', async () => {
+    const { transport, sockets, joined } = room()
+    await settle()
+    const socket = sockets[0]
+    await transport.leave()
+    socket?.receive({ type: 'welcome', peerId: 'me', peers: ['server', 'ada'] })
+    expect(joined).toEqual([])
   })
 })
