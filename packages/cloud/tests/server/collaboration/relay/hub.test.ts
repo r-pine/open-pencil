@@ -277,6 +277,111 @@ describe('collaboration relay', () => {
     )
   })
 
+  test('keeps a room whose save failed and hands it to the next peer', async () => {
+    const state = memoryStateStore()
+    let refuse = true
+    const hub = createCollaborationRelay({
+      authSecret: relaySecret,
+      store: {
+        load: state.store.load,
+        async store(room, update) {
+          if (refuse) throw new Error('Database unavailable')
+          await state.store.store(room, update)
+        }
+      },
+      maximumMessageBytes: 1_048_576,
+      maximumConnectionsPerRoom: 100,
+      persistDelayMs: 0,
+      persistRetryMs: 10,
+      onError: () => undefined
+    })
+    const alice = await join(hub)
+    alice.send({
+      type: 'message',
+      namespace: COLLAB_ACTIONS.yjsUpdate,
+      target: null,
+      payload: edit('unsaved')
+    })
+    alice.connection.closed()
+
+    const bob = await join(hub, { permission: 'view' })
+    bob.send({
+      type: 'message',
+      namespace: COLLAB_ACTIONS.syncStep1,
+      target: RELAY_SERVER_PEER,
+      payload: Y.encodeStateVector(new Y.Doc())
+    })
+    await until(() => bob.messages(COLLAB_ACTIONS.syncReply).length > 0)
+    expect(textOf(bob.messages(COLLAB_ACTIONS.syncReply)[0]?.payload ?? new Uint8Array())).toBe(
+      'unsaved'
+    )
+
+    // Once the store accepts it again, the retry saves what the room held.
+    refuse = false
+    bob.connection.closed()
+    await until(() => state.states.size > 0)
+    await hub.close()
+  })
+
+  test('stops retrying a failed save once the relay closes', async () => {
+    let attempts = 0
+    const hub = createCollaborationRelay({
+      authSecret: relaySecret,
+      store: {
+        load: memoryStateStore().store.load,
+        async store() {
+          attempts++
+          throw new Error('Database unavailable')
+        }
+      },
+      maximumMessageBytes: 1_048_576,
+      maximumConnectionsPerRoom: 100,
+      persistDelayMs: 60_000,
+      persistRetryMs: 5,
+      onError: () => undefined
+    })
+    const alice = await join(hub)
+    alice.send({
+      type: 'message',
+      namespace: COLLAB_ACTIONS.yjsUpdate,
+      target: null,
+      payload: edit('unsaved')
+    })
+    await hub.close()
+    const afterClose = attempts
+    await Bun.sleep(30)
+    expect(attempts).toBe(afterClose)
+  })
+
+  test('closes a socket that sends too much before it joins the room', async () => {
+    let releaseLimit: (() => void) | undefined
+    const { relay: hub } = relay({
+      maximumMessageBytes: 4096,
+      async maximumParticipants() {
+        await new Promise<void>((resolve) => {
+          releaseLimit = resolve
+        })
+        return 10
+      }
+    })
+    const client = connectTestClient((socket) => hub.connect(socket))
+    client.send({
+      type: 'auth',
+      token: await relayTicket({ documentId, permission: 'edit', principal: user('flooder') })
+    })
+    await until(() => releaseLimit !== undefined)
+    for (let index = 0; index < 4; index++) {
+      client.send({
+        type: 'message',
+        namespace: COLLAB_ACTIONS.yjsUpdate,
+        target: null,
+        payload: new Uint8Array(2048)
+      })
+    }
+    expect(client.closed?.code).toBe(RELAY_CLOSE.messageTooLarge)
+    releaseLimit?.()
+  })
+
   test('refuses sockets without a valid ticket for the room', async () => {
     const { relay: hub } = relay({ authTimeoutMs: 5 })
     const silent = connectTestClient((socket) => hub.connect(socket))
