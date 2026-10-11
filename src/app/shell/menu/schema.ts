@@ -33,6 +33,9 @@ export interface AppMenuPaletteMetadata {
 
 export type AppMenuHandler = 'editor' | 'shell'
 
+/** A feature an item waits for: it shows only while the feature is available (`./features`). */
+export type AppMenuFeature = 'cloud'
+
 export interface AppMenuActionItem {
   type?: 'item'
   id: string
@@ -43,6 +46,7 @@ export interface AppMenuActionItem {
   checkbox?: boolean
   target?: AppMenuTarget
   handler?: AppMenuHandler
+  feature?: AppMenuFeature
   palette?: AppMenuPaletteMetadata
   sub?: AppMenuEntry[]
 }
@@ -83,7 +87,7 @@ export const APP_MENU_SCHEMA = [
       { id: 'save', label: 'Save', shortcut: 'MOD+S' },
       { id: 'save-as', label: 'Save As…', shortcut: 'MOD+SHIFT+S' },
       { id: 'save-to-storage', label: 'Save to Storage…' },
-      { id: 'save-to-cloud', label: 'Save to Cloud…' },
+      { id: 'save-to-cloud', label: 'Save to Cloud…', feature: 'cloud' },
       { type: 'separator' },
       {
         id: 'export-selection',

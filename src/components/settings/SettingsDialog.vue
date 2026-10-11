@@ -5,6 +5,7 @@ import { computed } from 'vue'
 
 import { useI18n, useViewportKind } from '@open-pencil/vue'
 
+import { cloudAvailable } from '@/app/cloud/availability'
 import {
   settingsDialogOpen,
   registerSettingsNavigation,
@@ -43,8 +44,8 @@ const { settings, common } = useI18n()
 const navigation = provideSettingsNavigation()
 tryOnScopeDispose(registerSettingsNavigation(navigation.request))
 const { editing, confirming } = navigation
-const sections = computed(
-  () =>
+const sections = computed(() =>
+  (
     [
       { value: 'general', label: settings.value.general },
       { value: 'toolbar', label: settings.value.toolbar },
@@ -58,6 +59,9 @@ const sections = computed(
       { value: 'storage', label: settings.value.storage },
       { value: 'cloud', label: settings.value.cloud }
     ] satisfies { value: SettingsSection; label: string }[]
+  )
+    // Until Cloud is listed, previewed, or in use, its section stays out of Settings.
+    .filter((section) => section.value !== 'cloud' || cloudAvailable.value)
 )
 function onSectionChange(section: string | number): void {
   const match = sections.value.find((item) => item.value === section)

@@ -27,6 +27,7 @@ function cleanEntry(entry: AppMenuEntry): unknown | null {
     label: entry.label,
     accelerator: entryAccelerator(entry),
     checkbox: entry.checkbox,
+    feature: entry.feature,
     sub: entry.sub ? compact(entry.sub.map(cleanEntry)) : undefined
   }
 }

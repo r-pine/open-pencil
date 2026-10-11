@@ -17,7 +17,10 @@ use deep_link::path_matches_suffix;
 use fig_container::build_fig_file;
 use fonts::{list_system_fonts, load_system_font};
 use http::{cancel_http_request, proxy_http_request, ProxyHttpRequests};
-use menu::{install_app_menu, native_menu_checked, set_native_menu_checked};
+use menu::{
+    install_app_menu, native_menu_checked, set_native_menu_checked, set_native_menu_features,
+    update_app_menu, NativeMenuInputs, NativeMenuState,
+};
 use menu_events::handle_menu_event;
 use std::{
     path::{Path, PathBuf},
@@ -89,7 +92,7 @@ fn sharing_disabled_by_env() -> bool {
 
 #[tauri::command]
 fn set_recent_files(app: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
-    install_app_menu(&app, &paths).map_err(|error| error.to_string())
+    update_app_menu(&app, |inputs| inputs.recent_files = paths)
 }
 
 /// Name of the MCP entry point installed by `@open-pencil/mcp`.
@@ -361,6 +364,7 @@ pub fn run() {
         .manage(PendingOpen(Mutex::new(Vec::new())))
         .manage(ProxyHttpRequests::default())
         .manage(PendingRooms(Mutex::new(Vec::new())))
+        .manage(NativeMenuState(Mutex::new(NativeMenuInputs::default())))
         .invoke_handler(tauri::generate_handler![
             agents::agent_lookup,
             build_fig_file,
@@ -378,6 +382,7 @@ pub fn run() {
             proxy_http_request,
             cancel_http_request,
             set_recent_files,
+            set_native_menu_features,
             native_menu_checked,
             set_native_menu_checked,
             take_pending_open,
@@ -433,7 +438,10 @@ pub fn run() {
                 queue_deep_links(app.handle(), urls);
             }
 
-            Ok(install_app_menu(app.handle(), &[])?)
+            Ok(install_app_menu(
+                app.handle(),
+                &NativeMenuInputs::default(),
+            )?)
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

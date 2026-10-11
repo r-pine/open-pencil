@@ -2,6 +2,7 @@ import { cloudMessages } from '@open-pencil/vue'
 
 import { toast } from '@/app/shell/ui'
 
+import { checkCloudAvailability } from '../availability'
 import { cloudSignedIn } from '../connect/flow'
 import { beginCloudInvitation, resumeCloudInvitation } from '../invitations/flow'
 import { cloudServers, findCloudServer } from '../servers/store'
@@ -33,6 +34,7 @@ export async function startCloudSessions(options: {
   /** Leaves a Cloud link's address, so its secret is not kept in history. */
   leaveLinkAddress(): Promise<unknown>
 }): Promise<void> {
+  void checkCloudAvailability(globalThis.location.href)
   const link = readCloudLink()
   if (link) await options.leaveLinkAddress()
   const pending = takePendingCloudSignIn()

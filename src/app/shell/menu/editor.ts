@@ -6,6 +6,7 @@ import { clearRecentFiles, forgetRecentFile, recentLocalFileAt } from '@/app/rec
 import { runFocusedCommand } from '@/app/shell/commands/focused'
 import { createSharedEditorMenuActions } from '@/app/shell/menu/actions/editor'
 import { createSelectionMenuActions } from '@/app/shell/menu/actions/selection'
+import { watchNativeMenuFeatures } from '@/app/shell/menu/features'
 import { openFileDialog, openFileFromPath } from '@/app/shell/menu/files'
 import { useNativeMenuEvents } from '@/app/shell/menu/native-events'
 import { OPEN_RECENT_EVENT_PREFIX, watchRecentFilesMenu } from '@/app/shell/menu/recent-files'
@@ -32,6 +33,7 @@ export function useEditorMenu() {
   if (!isTauri()) return
 
   watchRecentFilesMenu()
+  watchNativeMenuFeatures()
 
   const { setTheme } = useAppTheme()
   const { runCommand } = useEditorCommands()

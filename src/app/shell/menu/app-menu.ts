@@ -32,11 +32,13 @@ import {
 import { appPreferences } from '@/app/settings/preferences/store'
 import { createSharedEditorMenuActions } from '@/app/shell/menu/actions/editor'
 import { createSelectionMenuActions } from '@/app/shell/menu/actions/selection'
+import { menuFeatureAvailable } from '@/app/shell/menu/features'
 import { openStorageWorkspace } from '@/app/shell/menu/navigation'
 import { createSaveMenuActions } from '@/app/shell/menu/save-actions'
 import type {
   AppMenuActionItem,
   AppMenuEntry,
+  AppMenuFeature,
   AppMenuGroupSchema,
   AppMenuIcon
 } from '@/app/shell/menu/schema'
@@ -80,8 +82,8 @@ function shortcutKeys(shortcut: string | undefined): string[] | undefined {
   })
 }
 
-function isVisible(entry: { target?: string }): boolean {
-  return entry.target !== 'native'
+function isVisible(entry: { target?: string; feature?: AppMenuFeature }): boolean {
+  return entry.target !== 'native' && menuFeatureAvailable(entry.feature)
 }
 
 function isSeparator(entry: AppMenuEntry): entry is Extract<AppMenuEntry, { type: 'separator' }> {

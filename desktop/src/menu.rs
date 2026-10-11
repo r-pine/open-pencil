@@ -1,5 +1,7 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 use tauri::menu::{
     CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, MenuItemKind, Submenu, SubmenuBuilder,
 };
@@ -22,8 +24,25 @@ struct MenuEntry {
     accelerator: Option<String>,
     #[serde(default)]
     checkbox: bool,
+    /// A feature the frontend turns on before the item shows (`set_native_menu_features`).
+    feature: Option<String>,
     #[serde(default)]
     sub: Vec<MenuEntry>,
+}
+
+/// What the schema menu is built from besides the schema: recent files and enabled features.
+#[derive(Default)]
+pub struct NativeMenuInputs {
+    pub recent_files: Vec<String>,
+    pub features: Vec<String>,
+}
+
+pub struct NativeMenuState(pub Mutex<NativeMenuInputs>);
+
+/// What one build reads: the inputs, and the check states the menu being replaced had.
+struct MenuBuild<'a> {
+    inputs: &'a NativeMenuInputs,
+    checked: HashMap<String, bool>,
 }
 
 #[cfg(target_os = "macos")]
@@ -54,10 +73,16 @@ fn app_menu_file() -> tauri::Result<AppMenuFile> {
 
 /// The macOS application menu holds Settings…, so the schema's copy is left out there, along
 /// with a separator it would leave at the end of its menu.
-fn platform_entries(items: &[MenuEntry]) -> Vec<&MenuEntry> {
+fn platform_entries<'a>(items: &'a [MenuEntry], features: &[String]) -> Vec<&'a MenuEntry> {
     let mut entries: Vec<&MenuEntry> = items
         .iter()
         .filter(|entry| !(cfg!(target_os = "macos") && entry.id.as_deref() == Some("settings")))
+        .filter(|entry| {
+            entry
+                .feature
+                .as_ref()
+                .is_none_or(|feature| features.contains(feature))
+        })
         .collect();
     while entries
         .last()
@@ -72,11 +97,11 @@ fn build_submenu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     label: &str,
     items: &[MenuEntry],
-    recent_files: &[String],
+    build: &MenuBuild,
 ) -> tauri::Result<Submenu<R>> {
     let mut builder = SubmenuBuilder::new(app, label);
 
-    for entry in platform_entries(items) {
+    for entry in platform_entries(items, &build.inputs.features) {
         if entry.r#type.as_deref() == Some("separator") {
             builder = builder.separator();
             continue;
@@ -84,12 +109,12 @@ fn build_submenu<R: tauri::Runtime>(
 
         let label = entry.label.as_deref().unwrap_or_default();
         if entry.id.as_deref() == Some("open-recent") {
-            let submenu = build_recent_files_submenu(app, label, recent_files)?;
+            let submenu = build_recent_files_submenu(app, label, &build.inputs.recent_files)?;
             builder = builder.item(&submenu);
             continue;
         }
         if !entry.sub.is_empty() {
-            let submenu = build_submenu(app, label, &entry.sub, recent_files)?;
+            let submenu = build_submenu(app, label, &entry.sub, build)?;
             builder = builder.item(&submenu);
             continue;
         }
@@ -114,7 +139,13 @@ fn build_submenu<R: tauri::Runtime>(
         }
 
         if entry.checkbox {
-            let mut item = CheckMenuItemBuilder::new(label).checked(true);
+            // A rebuild keeps what the menu it replaces had checked.
+            let checked = entry
+                .id
+                .as_ref()
+                .and_then(|id| build.checked.get(id).copied())
+                .unwrap_or(true);
+            let mut item = CheckMenuItemBuilder::new(label).checked(checked);
             if let Some(id) = &entry.id {
                 item = item.id(id);
             }
@@ -184,13 +215,42 @@ fn build_recent_files_submenu<R: tauri::Runtime>(
 
 fn build_schema_menus<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    recent_files: &[String],
+    build: &MenuBuild,
 ) -> tauri::Result<Vec<Submenu<R>>> {
     let groups: Vec<MenuGroup> = serde_json::from_str(include_str!("../generated/menu.json"))?;
     groups
         .iter()
-        .map(|group| build_submenu(app, &group.label, &group.items, recent_files))
+        .map(|group| build_submenu(app, &group.label, &group.items, build))
         .collect()
+}
+
+fn collect_checked<R: tauri::Runtime>(
+    items: Vec<MenuItemKind<R>>,
+    checked: &mut HashMap<String, bool>,
+) {
+    for item in items {
+        match &item {
+            MenuItemKind::Check(check) => {
+                if let Ok(state) = check.is_checked() {
+                    checked.insert(item.id().0.clone(), state);
+                }
+            }
+            MenuItemKind::Submenu(submenu) => {
+                if let Ok(children) = submenu.items() {
+                    collect_checked(children, checked);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn current_checked<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> HashMap<String, bool> {
+    let mut checked = HashMap::new();
+    if let Some(items) = app.menu().and_then(|menu| menu.items().ok()) {
+        collect_checked(items, &mut checked);
+    }
+    checked
 }
 
 fn find_menu_item<R: tauri::Runtime>(
@@ -247,8 +307,12 @@ pub fn set_native_menu_checked<R: tauri::Runtime>(
 
 pub fn install_app_menu<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
-    recent_files: &[String],
+    inputs: &NativeMenuInputs,
 ) -> tauri::Result<()> {
+    let build = MenuBuild {
+        inputs,
+        checked: current_checked(app),
+    };
     #[cfg(target_os = "macos")]
     let app_menu = {
         let items = app_menu_file()?;
@@ -285,7 +349,7 @@ pub fn install_app_menu<R: tauri::Runtime>(
             .build()?
     };
 
-    let schema_menus = build_schema_menus(app, recent_files)?;
+    let schema_menus = build_schema_menus(app, &build)?;
     let mut builder = MenuBuilder::new(app);
 
     #[cfg(target_os = "macos")]
@@ -299,4 +363,26 @@ pub fn install_app_menu<R: tauri::Runtime>(
 
     app.set_menu(builder.build()?)?;
     Ok(())
+}
+
+/// Rebuilds the menu after one of its inputs changed.
+pub fn update_app_menu<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    change: impl FnOnce(&mut NativeMenuInputs),
+) -> Result<(), String> {
+    let state = tauri::Manager::state::<NativeMenuState>(app);
+    let mut inputs = state
+        .0
+        .lock()
+        .map_err(|_| "Menu state is unavailable".to_string())?;
+    change(&mut inputs);
+    install_app_menu(app, &inputs).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_native_menu_features<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    features: Vec<String>,
+) -> Result<(), String> {
+    update_app_menu(&app, |inputs| inputs.features = features)
 }

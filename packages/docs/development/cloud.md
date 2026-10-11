@@ -237,3 +237,11 @@ the person may still open elsewhere.
 **2026-10 · Home is split into places.** Recent files, each server's workspaces, documents shared
 with the person, and the storage bucket are separate places in a sidebar, so Cloud does not crowd
 the local file list and one server's workspaces show at a time.
+
+**2026-10 · Cloud entry points wait for the official server's listing.** Settings → OpenPencil Cloud
+and Save to Cloud stay hidden until `cloud.openpencil.dev` answers discovery with a `listing` whose
+minimum editor version this editor meets, a server is already connected on the device, or someone
+opened the editor with `?cloud=preview`. Launching, or pulling back, is a change to that server's
+config rather than an editor release, and a launch that needs a client change sets the minimum to the
+release that has it. A separate flags file or a third-party flag service would be one more thing to
+deploy for one switch.

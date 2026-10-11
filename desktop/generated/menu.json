@@ -43,7 +43,8 @@
       },
       {
         "id": "save-to-cloud",
-        "label": "Save to Cloud…"
+        "label": "Save to Cloud…",
+        "feature": "cloud"
       },
       {
         "type": "separator"
