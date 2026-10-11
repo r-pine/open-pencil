@@ -1,4 +1,10 @@
 import {
+  noCloudDynamicHTMLRule,
+  noCloudRawSQLRule,
+  noCloudSecretInQueryRule,
+  noCloudSecretLoggingRule
+} from '#lint/rules/cloud.ts'
+import {
   noConditionalObjectSpreads,
   noFlatKiwiModules,
   noMixedCaseAcronymIdentifiers
@@ -500,6 +506,10 @@ const plugin = {
     'no-top-level-prefixed-test-files': noTopLevelPrefixedTestFiles,
     'no-conditional-object-spreads': noConditionalObjectSpreads,
     'no-hand-rolled-base64': noHandRolledBase64Rule,
+    'no-cloud-raw-sql': noCloudRawSQLRule,
+    'no-cloud-dynamic-html': noCloudDynamicHTMLRule,
+    'no-cloud-secret-in-query': noCloudSecretInQueryRule,
+    'no-cloud-secret-logging': noCloudSecretLoggingRule,
     'no-unvalidated-json-parse': noUnvalidatedJSONParseRule,
     'prefer-es-toolkit': preferEsToolkitRule,
     'no-module-mocking': noModuleMockingRule,

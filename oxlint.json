@@ -450,6 +450,35 @@
       }
     },
     {
+      "files": ["packages/cloud/src/server/**/*.ts"],
+      "rules": {
+        "open-pencil/no-cloud-raw-sql": "error",
+        "open-pencil/no-cloud-dynamic-html": "error"
+      }
+    },
+    {
+      "files": [
+        "packages/cloud/src/server/db/expressions.ts",
+        "packages/cloud/src/server/db/migrate.ts",
+        "packages/cloud/src/server/db/migrations/**/*.ts"
+      ],
+      "rules": {
+        "open-pencil/no-cloud-raw-sql": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/cloud/src/**/*.ts",
+        "src/app/cloud/**/*.ts",
+        "src/app/collab/**/*.ts",
+        "src/app/integrations/storage/cloud/**/*.ts"
+      ],
+      "rules": {
+        "open-pencil/no-cloud-secret-in-query": "error",
+        "open-pencil/no-cloud-secret-logging": "error"
+      }
+    },
+    {
       "files": ["tools/ci/policy/src/**/*.ts"],
       "rules": {
         "open-pencil/prefer-es-toolkit": "off"
