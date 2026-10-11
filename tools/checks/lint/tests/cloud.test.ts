@@ -42,7 +42,10 @@ describe('no-cloud-secret-in-query', () => {
   test.each([
     "url.searchParams.set('secret', value)",
     "url.searchParams.append('token', value)",
-    "new URL(base).searchParams.set('token', value)"
+    "new URL(base).searchParams.set('token', value)",
+    'new URLSearchParams({ token })',
+    "new URLSearchParams({ 'secret': value })",
+    `fetch(\`\${base}/share?token=\${value}\`)`
   ])('rejects %s', async (source) => {
     expect(await diagnostics('no-cloud-secret-in-query', source)).toHaveLength(1)
   })
@@ -50,7 +53,9 @@ describe('no-cloud-secret-in-query', () => {
   test.each([
     "url.searchParams.set('server', value)",
     'url.hash = secret',
-    "headers.set('token', value)"
+    "headers.set('token', value)",
+    'new URLSearchParams({ server })',
+    `fetch(\`\${base}/share#secret=\${value}\`)`
   ])('accepts %s', async (source) => {
     expect(await diagnostics('no-cloud-secret-in-query', source)).toHaveLength(0)
   })
@@ -62,7 +67,12 @@ describe('no-cloud-secret-logging', () => {
     "console.error('[Cloud]', session.accessToken)",
     "console.warn(request.headers['cookie'])",
     'console.debug(shareSecret)',
-    'console.info(authorization)'
+    'console.info(authorization)',
+    `console.log(\`token=\${token}\`)`,
+    'console.log({ token })',
+    'console.log({ sessionCookie: value })',
+    "console.log('x: ' + session.accessToken)",
+    'console.log(...[token])'
   ])('rejects %s', async (source) => {
     expect(await diagnostics('no-cloud-secret-logging', source)).toHaveLength(1)
   })
@@ -70,7 +80,10 @@ describe('no-cloud-secret-logging', () => {
   test.each([
     "console.error('[Cloud] Email worker failed:', error)",
     'console.log(documentId)',
-    'logger.info(token)'
+    'logger.info(token)',
+    'console.log(tokenCount)',
+    `console.log(\`\${tokenizer.name}\`)`,
+    'console.log({ documentId, size })'
   ])('accepts %s', async (source) => {
     expect(await diagnostics('no-cloud-secret-logging', source)).toHaveLength(0)
   })

@@ -2,7 +2,10 @@ import { defineRule } from '@oxlint/plugins'
 import type { ESTree } from '@oxlint/plugins'
 
 /** Names that hold Cloud credentials: secrets, tokens, cookies, authorization values, room keys. */
-const SECRET_NAME = /secret|token|authorization|cookie|roomkey|privatekey/i
+/** Names that end in a credential noun: `accessToken` and `authSecret`, not `tokenCount`. */
+const SECRET_NAME = /(?:secret|token|authorization|cookie|room_?key|private_?key)s?$/i
+/** A secret or token written into a URL's query string. */
+const QUERY_SECRET_TEXT = /[?&](?:secret|token)=/
 const QUERY_SECRET_NAMES = new Set(['secret', 'token'])
 const QUERY_METHODS = new Set(['set', 'append'])
 const CONSOLE_METHODS = new Set(['log', 'info', 'warn', 'error', 'debug'])
@@ -24,6 +27,41 @@ function valueName(node: ESTree.Node): string | null {
   if (node.type === 'Identifier') return node.name
   if (node.type === 'MemberExpression') return memberName(node)
   return null
+}
+
+function propertyKeyName(property: ESTree.ObjectProperty): string | null {
+  if (!property.computed && property.key.type === 'Identifier') return property.key.name
+  if (property.key.type === 'Literal' && typeof property.key.value === 'string')
+    return property.key.value
+  return null
+}
+
+/**
+ * The names a logged value is built from: identifiers, members, and object keys, through
+ * templates, concatenation, objects, arrays, and spreads.
+ */
+function loggedNames(node: ESTree.Node | null): string[] {
+  if (!node) return []
+  switch (node.type) {
+    case 'TemplateLiteral':
+      return node.expressions.flatMap(loggedNames)
+    case 'BinaryExpression':
+      return [...loggedNames(node.left), ...loggedNames(node.right)]
+    case 'SpreadElement':
+      return loggedNames(node.argument)
+    case 'ArrayExpression':
+      return node.elements.flatMap(loggedNames)
+    case 'ObjectExpression':
+      return node.properties.flatMap((property) =>
+        property.type === 'SpreadElement'
+          ? loggedNames(property.argument)
+          : [propertyKeyName(property) ?? [], loggedNames(property.value)].flat()
+      )
+    default: {
+      const name = valueName(node)
+      return name === null ? [] : [name]
+    }
+  }
 }
 
 /** Kysely's typed builder everywhere; raw `sql` templates only in migrations and reviewed helpers. */
@@ -97,6 +135,21 @@ export const noCloudSecretInQueryRule = defineRule({
           QUERY_SECRET_NAMES.has(key.value)
         )
           context.report({ node, messageId: 'query' })
+      },
+      NewExpression(node) {
+        if (node.callee.type !== 'Identifier' || node.callee.name !== 'URLSearchParams') return
+        const [init] = node.arguments
+        if (init?.type !== 'ObjectExpression') return
+        const named = init.properties.some((property) => {
+          if (property.type === 'SpreadElement') return false
+          const name = propertyKeyName(property)
+          return name !== null && QUERY_SECRET_NAMES.has(name)
+        })
+        if (named) context.report({ node, messageId: 'query' })
+      },
+      TemplateLiteral(node) {
+        if (node.quasis.some((quasi) => QUERY_SECRET_TEXT.test(quasi.value.raw)))
+          context.report({ node, messageId: 'query' })
       }
     }
   }
@@ -121,10 +174,9 @@ export const noCloudSecretLoggingRule = defineRule({
         if (callee.object.type !== 'Identifier' || callee.object.name !== 'console') return
         const method = memberName(callee)
         if (!method || !CONSOLE_METHODS.has(method)) return
-        const leaks = node.arguments.some((argument) => {
-          const name = valueName(argument)
-          return name !== null && SECRET_NAME.test(name)
-        })
+        const leaks = node.arguments.some((argument) =>
+          loggedNames(argument).some((name) => SECRET_NAME.test(name))
+        )
         if (leaks) context.report({ node, messageId: 'logged' })
       }
     }
