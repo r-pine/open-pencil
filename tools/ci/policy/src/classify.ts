@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { appendFile } from 'node:fs/promises'
 
+import { cloudInputs } from './cloud-inputs'
 import { classifyPaths } from './policy'
 import { isVerifiedTree } from './verified-tree/status'
 
@@ -16,7 +17,13 @@ const paths = execFileSync('git', ['diff', '--no-renames', '--name-only', '-z', 
   .toString('utf8')
   .split('\0')
   .filter(Boolean)
-const scope = (await queuedTreeVerified()) ? 'verified' : classifyPaths(paths)
+// The workflow runs this from the repository root, before dependencies are installed. Manifests
+// that can't be read, such as a broken package.json, run the Cloud checks rather than skip them.
+const inputs = await cloudInputs(process.cwd()).catch((error: unknown) => {
+  console.log(`Could not read the Cloud inputs, so the Cloud checks run: ${String(error)}`)
+  return 'all' as const
+})
+const scope = (await queuedTreeVerified()) ? 'verified' : classifyPaths(paths, inputs)
 await appendFile(output, `scope=${scope}\n`)
 console.log(`Selected ${scope} checks for ${paths.length} changed paths`)
 

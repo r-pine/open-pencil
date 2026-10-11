@@ -92,7 +92,7 @@ jobs:
   source-quality:
     name: Code quality
     needs: changes
-    if: needs.changes.outputs.scope == 'code'
+    if: needs.changes.outputs.scope == 'code' || needs.changes.outputs.scope == 'cloud'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -123,7 +123,7 @@ jobs:
   package-quality:
     name: Package integrity
     needs: changes
-    if: needs.changes.outputs.scope == 'code'
+    if: needs.changes.outputs.scope == 'code' || needs.changes.outputs.scope == 'cloud'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -155,7 +155,7 @@ jobs:
   repository-quality:
     name: Repository hygiene
     needs: changes
-    if: needs.changes.outputs.scope == 'code'
+    if: needs.changes.outputs.scope == 'code' || needs.changes.outputs.scope == 'cloud'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -192,7 +192,7 @@ jobs:
   storybook:
     name: Component workshop
     needs: changes
-    if: needs.changes.outputs.scope == 'code'
+    if: needs.changes.outputs.scope == 'code' || needs.changes.outputs.scope == 'cloud'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -211,7 +211,7 @@ jobs:
   native-test-contracts:
     name: Native app contracts
     needs: changes
-    if: needs.changes.outputs.scope == 'code'
+    if: needs.changes.outputs.scope == 'code' || needs.changes.outputs.scope == 'cloud'
     timeout-minutes: 8
     runs-on: ubuntu-24.04
     container:
@@ -244,7 +244,7 @@ jobs:
 
   unit-tests:
     needs: changes
-    if: needs.changes.outputs.scope == 'code'
+    if: needs.changes.outputs.scope == 'code' || needs.changes.outputs.scope == 'cloud'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     strategy:
@@ -272,7 +272,7 @@ jobs:
   feedback-tests:
     name: Feedback service
     needs: changes
-    if: needs.changes.outputs.scope == 'code'
+    if: needs.changes.outputs.scope == 'code' || needs.changes.outputs.scope == 'cloud'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -288,7 +288,7 @@ jobs:
   cloud-tests:
     name: Cloud package
     needs: changes
-    if: needs.changes.outputs.scope == 'code'
+    if: needs.changes.outputs.scope == 'cloud'
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -307,7 +307,7 @@ jobs:
   cloud-storage:
     name: Cloud storage — ${{ matrix.store }}
     needs: changes
-    if: needs.changes.outputs.scope == 'code'
+    if: needs.changes.outputs.scope == 'cloud'
     timeout-minutes: 15
     runs-on: ubuntu-latest
     strategy:

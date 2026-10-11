@@ -36,12 +36,13 @@ test('classifier reads real Git deletions and renames without losing the origina
     env: { ...process.env, CI_BASE_SHA: base, GITHUB_OUTPUT: output }
   })
   expect(result.exitCode).toBe(0)
-  expect(await readFile(output, 'utf8')).toBe('scope=code\n')
+  // This repository has no manifests to read the Cloud inputs from, so every check runs.
+  expect(await readFile(output, 'utf8')).toBe('scope=cloud\n')
 
   const failed = Bun.spawnSync([process.execPath, command], {
     cwd: root,
     env: { ...process.env, CI_BASE_SHA: 'invalid', GITHUB_OUTPUT: output }
   })
   expect(failed.exitCode).not.toBe(0)
-  expect(await readFile(output, 'utf8')).toBe('scope=code\n')
+  expect(await readFile(output, 'utf8')).toBe('scope=cloud\n')
 })
