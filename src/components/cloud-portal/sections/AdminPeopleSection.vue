@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { refDebounced } from '@vueuse/core'
-import { ref, shallowRef, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import { useCloudPortalMessages, useI18n } from '@open-pencil/vue'
 
 import { usePortal } from '@/app/cloud-portal/context'
-import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
 import { portalDate } from '@/app/cloud-portal/format'
-import { latestRequest } from '@/app/cloud-portal/latest'
+import { usePortalAction, usePortalLoad } from '@/app/cloud-portal/state'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 
 import PortalPeople from '../console/PortalPeople.vue'
@@ -17,47 +16,37 @@ const emit = defineEmits<{ total: [count: number] }>()
 const portal = usePortal()
 const messages = useCloudPortalMessages()
 const { locale } = useI18n()
-const failures = usePortalFailureMessages()
 const query = ref('')
 const search = refDebounced(query, 250)
-const people = shallowRef<PortalPerson[]>([])
-const error = ref<string | null>(null)
 
-const startLoad = latestRequest()
+const {
+  data: listing,
+  error: loadError,
+  reload
+} = usePortalLoad(async (): Promise<{ people: PortalPerson[]; total: number } | null> => {
+  const { users, total } = await portal.api.users(search.value.trim() || undefined)
+  const you = portal.account.value?.user.userId
+  const people = users.map((user) => ({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    admin: user.role === 'admin',
+    suspended: user.banned === true,
+    joinedOn: portalDate(user.createdAt, locale.value),
+    you: user.id === you
+  }))
+  return { people, total }
+}, null)
+const people = computed(() => listing.value?.people ?? [])
 
-async function load() {
-  const isLatest = startLoad()
-  try {
-    const { users, total } = await portal.api.users(search.value.trim() || undefined)
-    if (!isLatest()) return
-    const you = portal.account.value?.user.userId
-    people.value = users.map((user) => ({
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      admin: user.role === 'admin',
-      suspended: user.banned === true,
-      joinedOn: portalDate(user.createdAt, locale.value),
-      you: user.id === you
-    }))
-    emit('total', total)
-    error.value = null
-  } catch (cause) {
-    if (isLatest()) error.value = failures.api(cause)
-  }
-}
+const { error: actionError, run: act } = usePortalAction(async (change: () => Promise<unknown>) => {
+  await change()
+  await reload()
+})
+const error = computed(() => actionError.value ?? loadError.value)
 
-async function act(change: () => Promise<unknown>) {
-  error.value = null
-  try {
-    await change()
-    await load()
-  } catch (cause) {
-    error.value = failures.api(cause)
-  }
-}
-
-watch(search, () => void load(), { immediate: true })
+watch(search, () => void reload())
+watch(listing, (current) => current && emit('total', current.total))
 </script>
 
 <template>

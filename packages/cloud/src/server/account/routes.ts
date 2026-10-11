@@ -192,3 +192,6 @@ export function createAccountRoutes(services: AccountRouteDependencies) {
       return result instanceof Response ? result : context.json(result)
     })
 }
+
+/** The account routes' types, for the portal's typed client. */
+export type CloudAccountRoutes = ReturnType<typeof createAccountRoutes>

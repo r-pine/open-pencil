@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef } from 'vue'
+import { computed, ref } from 'vue'
 
-import type { CloudAuthenticationMethods } from '@open-pencil/cloud/contract'
 import { useCloudPortalMessages, useI18n } from '@open-pencil/vue'
 
 import { usePortal } from '@/app/cloud-portal/context'
 import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
 import { portalDate } from '@/app/cloud-portal/format'
 import { portalURL } from '@/app/cloud-portal/navigation'
+import { usePortalAction, usePortalLoad } from '@/app/cloud-portal/state'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 
 import PortalAccountSecurity from '../account/PortalAccountSecurity.vue'
@@ -22,21 +22,25 @@ const messages = useCloudPortalMessages()
 const { locale } = useI18n()
 const failures = usePortalFailureMessages()
 
-const methods = shallowRef<CloudAuthenticationMethods | null>(null)
-type MFAStatus = Awaited<ReturnType<typeof portal.api.mfaStatus>>['mfa']
-type Passkey = Awaited<ReturnType<typeof portal.api.passkeys>>['passkeys'][number]
-const mfa = shallowRef<MFAStatus | null>(null)
-const passkeys = shallowRef<Passkey[]>([])
-const busy = ref(false)
-const error = ref<string | null>(null)
+const security = usePortalLoad(async () => {
+  const [methods, mfa, passkeys] = await Promise.all([
+    portal.api.authenticationMethods(),
+    portal.api.mfaStatus(),
+    portal.api.passkeys()
+  ])
+  return { methods, mfa: mfa.mfa, passkeys: passkeys.passkeys }
+}, null)
+const methods = computed(() => security.data.value?.methods ?? null)
+const mfa = computed(() => security.data.value?.mfa ?? null)
+const passkeys = computed(() => security.data.value?.passkeys ?? [])
 const notice = ref<string | null>(null)
 
 type PasswordStep = 'change' | 'enable-authenticator' | 'disable-authenticator' | 'recovery-codes'
 const passwordStep = ref<PasswordStep | null>(null)
-const passwordError = ref<string | null>(null)
 const setupURI = ref<string | null>(null)
-const setupError = ref<string | null>(null)
 const recoveryCodes = ref<string[] | null>(null)
+/** Recovery codes from turning the authenticator on, shown once its first code is verified. */
+let pendingCodes: string[] = []
 
 const hasPassword = computed(
   () => methods.value?.methods.some((method) => method.provider === 'credential') ?? false
@@ -58,94 +62,94 @@ const minimum = computed(
   () => portal.discovery.authentication.emailPassword?.minimumPasswordLength ?? 15
 )
 
-async function load() {
-  const [loadedMethods, loadedMFA, loadedPasskeys] = await Promise.all([
-    portal.api.authenticationMethods(),
-    portal.api.mfaStatus(),
-    portal.api.passkeys()
-  ])
-  methods.value = loadedMethods
-  mfa.value = loadedMFA.mfa
-  passkeys.value = loadedPasskeys.passkeys
-}
-
-/** Runs one change, shows what went wrong if it fails, and reloads what the page shows. */
-async function run(change: () => Promise<void>) {
-  busy.value = true
-  error.value = null
+/** One change from the page, then what the page shows read again. */
+const change = usePortalAction(async (work: () => Promise<unknown>) => {
   notice.value = null
-  try {
-    await change()
-    await load()
-  } catch (cause) {
-    error.value = failures.api(cause)
-  } finally {
-    busy.value = false
-  }
-}
+  await work()
+  await security.reload()
+})
 
-async function link(provider: PortalSignInMethod) {
-  await run(async () => {
+const verifyAction = usePortalAction(async (code: string) => {
+  await portal.api.verifyTOTP(code.trim())
+  setupURI.value = null
+  recoveryCodes.value = pendingCodes
+  pendingCodes = []
+  await security.reload()
+})
+
+/** A step behind the password dialog; its failure shows in the dialog while it is open. */
+const passwordAction = usePortalAction(
+  async (step: PasswordStep, password: string | undefined, next: string) => {
+    let setup: { totpURI: string; backupCodes: string[] } | null = null
+    let codes: string[] | null = null
+    if (step === 'change') await portal.api.changePassword(password ?? '', next)
+    else if (step === 'enable-authenticator') setup = await portal.api.enableTOTP(password)
+    else if (step === 'disable-authenticator') await portal.api.disableTOTP(password)
+    else codes = (await portal.api.regenerateRecoveryCodes(password)).backupCodes
+    // The step succeeded: close the password dialog before showing what comes next.
+    passwordStep.value = null
+    if (setup) {
+      verifyAction.clear()
+      recoveryCodes.value = null
+      pendingCodes = setup.backupCodes
+      setupURI.value = setup.totpURI
+    }
+    if (codes) recoveryCodes.value = codes
+    await security.reload()
+  }
+)
+
+const busy = computed(
+  () =>
+    security.loading.value ||
+    change.busy.value ||
+    passwordAction.busy.value ||
+    verifyAction.busy.value
+)
+const passwordError = computed(() => (passwordStep.value ? passwordAction.error.value : null))
+const error = computed(
+  () =>
+    change.error.value ??
+    (passwordStep.value ? null : passwordAction.error.value) ??
+    security.error.value
+)
+
+function link(provider: PortalSignInMethod) {
+  void change.run(async () => {
     const { url } = await portal.api.linkSocial(provider, portalURL('/account'))
     globalThis.location.assign(url)
   })
 }
 
+function openPasswordStep(step: PasswordStep) {
+  passwordAction.clear()
+  passwordStep.value = step
+}
+
+/** A failure inside the dialog stays with it; closing the dialog drops it. */
+function closePasswordStep() {
+  passwordStep.value = null
+  passwordAction.clear()
+}
+
 function changePassword() {
   if (hasPassword.value) {
-    passwordError.value = null
-    passwordStep.value = 'change'
+    openPasswordStep('change')
     return
   }
   const email = portal.account.value?.user.email
   if (!email) return
-  void run(async () => {
-    await portal.api.requestPasswordReset(email, portalURL('/auth/reset-password'))
-    notice.value = messages.value.passwordResetSent
+  void change.run(async () => {
+    const result = await portal.auth.requestPasswordReset(email, portalURL('/auth/reset-password'))
+    if (result.ok) notice.value = messages.value.passwordResetSent
+    else change.fail(failures.failure(result.failure))
   })
 }
 
 /** Steps that need the current password when the account has one. */
 function withPassword(step: Exclude<PasswordStep, 'change'>) {
-  if (hasPassword.value) {
-    passwordError.value = null
-    passwordStep.value = step
-    return
-  }
-  void finishPasswordStep(step, undefined)
-}
-
-async function finishPasswordStep(step: PasswordStep, password: string | undefined, next = '') {
-  busy.value = true
-  passwordError.value = null
-  let setup: { totpURI: string; backupCodes: string[] } | null = null
-  let codes: string[] | null = null
-  try {
-    if (step === 'change') await portal.api.changePassword(password ?? '', next)
-    else if (step === 'enable-authenticator') setup = await portal.api.enableTOTP(password)
-    else if (step === 'disable-authenticator') await portal.api.disableTOTP(password)
-    else codes = (await portal.api.regenerateRecoveryCodes(password)).backupCodes
-  } catch (cause) {
-    if (passwordStep.value) passwordError.value = failures.api(cause)
-    else error.value = failures.api(cause)
-    busy.value = false
-    return
-  }
-  // The step succeeded: close the password dialog before showing what comes next.
-  passwordStep.value = null
-  if (setup) {
-    recoveryCodes.value = null
-    pendingCodes = setup.backupCodes
-    setupURI.value = setup.totpURI
-  }
-  if (codes) recoveryCodes.value = codes
-  try {
-    await load()
-  } catch (cause) {
-    error.value = failures.api(cause)
-  } finally {
-    busy.value = false
-  }
+  if (hasPassword.value) openPasswordStep(step)
+  else void passwordAction.run(step, undefined, '')
 }
 
 /** Closing setup before the code is verified leaves the authenticator off, so its codes go too. */
@@ -154,32 +158,12 @@ function closeAuthenticatorSetup() {
   pendingCodes = []
 }
 
-let pendingCodes: string[] = []
-
-async function verifyAuthenticator(code: string) {
-  busy.value = true
-  setupError.value = null
-  try {
-    await portal.api.verifyTOTP(code.trim())
-    setupURI.value = null
-    recoveryCodes.value = pendingCodes
-    pendingCodes = []
-    await load()
-  } catch (cause) {
-    setupError.value = failures.api(cause)
-  } finally {
-    busy.value = false
-  }
-}
-
-async function addPasskey() {
-  await run(async () => {
+function addPasskey() {
+  void change.run(async () => {
     const result = await portal.auth.addPasskey()
-    if (!result.ok) error.value = failures.failure(result.failure)
+    if (!result.ok) change.fail(failures.failure(result.failure))
   })
 }
-
-onMounted(() => void run(async () => undefined))
 </script>
 
 <template>
@@ -202,13 +186,13 @@ onMounted(() => void run(async () => undefined))
       :two-step-required="mfa.required && !mfa.enabled && passkeys.length === 0"
       :busy="busy"
       @link="link"
-      @unlink="(id) => run(() => portal.api.unlinkAuthenticationMethod(id).then(() => undefined))"
+      @unlink="(id) => change.run(() => portal.api.unlinkAuthenticationMethod(id))"
       @change-password="changePassword"
       @set-up-authenticator="withPassword('enable-authenticator')"
       @turn-off-authenticator="withPassword('disable-authenticator')"
       @new-recovery-codes="withPassword('recovery-codes')"
       @add-passkey="addPasskey"
-      @remove-passkey="(id) => run(() => portal.api.deletePasskey(id).then(() => undefined))"
+      @remove-passkey="(id) => change.run(() => portal.api.deletePasskey(id))"
     />
 
     <PortalPasswordDialog
@@ -217,19 +201,19 @@ onMounted(() => void run(async () => undefined))
       :minimum-password-length="minimum"
       :error="passwordError"
       :saving="busy"
-      @update:open="(open) => !open && (passwordStep = null)"
+      @update:open="(open) => !open && closePasswordStep()"
       @submit="
-        ({ current, next }) => passwordStep && finishPasswordStep(passwordStep, current, next)
+        ({ current, next }) => passwordStep && passwordAction.run(passwordStep, current, next)
       "
     />
     <PortalAuthenticatorSetup
       v-if="setupURI"
       :open="true"
       :uri="setupURI"
-      :error="setupError"
+      :error="verifyAction.error.value"
       :verifying="busy"
       @update:open="(open) => !open && closeAuthenticatorSetup()"
-      @verify="verifyAuthenticator"
+      @verify="verifyAction.run"
     />
     <PortalRecoveryCodes
       v-if="recoveryCodes"

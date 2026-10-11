@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { ref, shallowRef, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import { useCloudPortalMessages, useI18n } from '@open-pencil/vue'
 
 import { usePortal } from '@/app/cloud-portal/context'
-import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
 import { portalDate } from '@/app/cloud-portal/format'
-import { latestRequest } from '@/app/cloud-portal/latest'
+import { usePortalAction, usePortalLoad } from '@/app/cloud-portal/state'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 
 import PortalAccessRequests from '../console/PortalAccessRequests.vue'
@@ -16,49 +15,37 @@ const emit = defineEmits<{ changed: [] }>()
 const portal = usePortal()
 const messages = useCloudPortalMessages()
 const { locale } = useI18n()
-const failures = usePortalFailureMessages()
 const filter = ref<AccessRequestStatus>('pending')
-const requests = shallowRef<AccessRequest[]>([])
-const busy = ref<string | null>(null)
-const error = ref<string | null>(null)
 
-const startLoad = latestRequest()
+const {
+  data: requests,
+  error: loadError,
+  reload
+} = usePortalLoad(async (): Promise<AccessRequest[]> => {
+  const { enrollments } = await portal.api.enrollments(filter.value)
+  return enrollments.map((enrollment) => ({
+    id: enrollment.id,
+    name: enrollment.name,
+    email: enrollment.email,
+    reason: enrollment.reason,
+    requestedOn: portalDate(enrollment.requestedAt, locale.value),
+    status: enrollment.status,
+    reviewedBy: enrollment.reviewedBy
+  }))
+}, [])
 
-async function load() {
-  const isLatest = startLoad()
-  try {
-    const { enrollments } = await portal.api.enrollments(filter.value)
-    if (!isLatest()) return
-    requests.value = enrollments.map((enrollment) => ({
-      id: enrollment.id,
-      name: enrollment.name,
-      email: enrollment.email,
-      reason: enrollment.reason,
-      requestedOn: portalDate(enrollment.requestedAt, locale.value),
-      status: enrollment.status,
-      reviewedBy: enrollment.reviewedBy
-    }))
-    error.value = null
-  } catch (cause) {
-    if (isLatest()) error.value = failures.api(cause)
-  }
-}
+const {
+  subject: busy,
+  error: reviewError,
+  run: review
+} = usePortalAction(async (id: string, action: 'approve' | 'reject' | 'revoke') => {
+  await portal.api.reviewEnrollment(id, action)
+  emit('changed')
+  await reload()
+})
+const error = computed(() => reviewError.value ?? loadError.value)
 
-async function review(id: string, action: 'approve' | 'reject' | 'revoke') {
-  busy.value = id
-  error.value = null
-  try {
-    await portal.api.reviewEnrollment(id, action)
-    emit('changed')
-    await load()
-  } catch (cause) {
-    error.value = failures.api(cause)
-  } finally {
-    busy.value = null
-  }
-}
-
-watch(filter, () => void load(), { immediate: true })
+watch(filter, () => void reload())
 </script>
 
 <template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { computedAsync } from '@vueuse/core'
 import { toDataURL } from 'qrcode'
-import { ref, watchEffect } from 'vue'
+import { computed, ref } from 'vue'
 
 import { useCloudPortalMessages } from '@open-pencil/vue'
 
@@ -25,20 +26,11 @@ const emit = defineEmits<{ verify: [code: string] }>()
 const ui = portalForm()
 const messages = useCloudPortalMessages()
 const code = ref('')
-const image = ref<string | null>(null)
-const secret = ref('')
-
+const secret = computed(() =>
+  URL.canParse(uri) ? (new URL(uri).searchParams.get('secret') ?? '') : ''
+)
 // A newer key replaces a QR code still rendering for an older one; a failed render leaves the key.
-watchEffect(async (onCleanup) => {
-  let superseded = false
-  onCleanup(() => {
-    superseded = true
-  })
-  const parsed = URL.canParse(uri) ? new URL(uri) : null
-  secret.value = parsed?.searchParams.get('secret') ?? ''
-  const rendered = await toDataURL(uri, { margin: 1, width: 176 }).catch(() => null)
-  if (!superseded) image.value = rendered
-})
+const image = computedAsync(() => toDataURL(uri, { margin: 1, width: 176 }).catch(() => null), null)
 </script>
 
 <template>

@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { usePortal } from '@/app/cloud-portal/context'
 import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
 import { continuationPath } from '@/app/cloud-portal/navigation'
+import { usePortalAction } from '@/app/cloud-portal/state'
 import PortalTwoFactor from '@/components/cloud-portal/auth/PortalTwoFactor.vue'
 
 const portal = usePortal()
@@ -12,39 +13,33 @@ const route = useRoute()
 const router = useRouter()
 const { failure } = usePortalFailureMessages()
 const method = ref<'authenticator' | 'recovery'>('authenticator')
-const error = ref<string | null>(null)
-const verifying = ref(false)
 const redirect = computed(() => continuationPath(route.query.redirect))
 const passkeys = computed(() => portal.discovery.authentication.mfa?.passkeys ?? false)
 
-async function finish(result: Awaited<ReturnType<typeof portal.auth.verifyTwoStep>>) {
+type TwoStepResult = Awaited<ReturnType<typeof portal.auth.verifyTwoStep>>
+
+/** One attempt at the second step: a refused code stays on the page, a passed one continues. */
+const {
+  busy: verifying,
+  error,
+  run,
+  fail
+} = usePortalAction(async (attempt: () => Promise<TwoStepResult>) => {
+  const result = await attempt()
   if (!result.ok) {
-    error.value = failure(result.failure)
+    fail(failure(result.failure))
     return
   }
   await portal.refreshAccount()
   await router.replace(redirect.value)
+})
+
+function verify(code: string) {
+  void run(() => portal.auth.verifyTwoStep(method.value, code.trim()))
 }
 
-async function verify(code: string) {
-  verifying.value = true
-  error.value = null
-  try {
-    await finish(await portal.auth.verifyTwoStep(method.value, code.trim()))
-  } finally {
-    verifying.value = false
-  }
-}
-
-async function passkey() {
-  if (verifying.value) return
-  verifying.value = true
-  error.value = null
-  try {
-    await finish(await portal.auth.withPasskey())
-  } finally {
-    verifying.value = false
-  }
+function passkey() {
+  if (!verifying.value) void run(() => portal.auth.withPasskey())
 }
 </script>
 

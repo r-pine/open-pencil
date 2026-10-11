@@ -1,16 +1,17 @@
 import { createAccountAPI } from './account'
 import { createAdministrationAPI } from './administration'
-import { createCloudRequest, type CloudPortalClientOptions } from './request'
+import { createCloudCall, createPortalRouteClients, type CloudPortalClientOptions } from './request'
 
 export { CloudPortalAPIError, type CloudPortalAPIErrorKind } from './request'
 export type { CloudPortalClientOptions } from './request'
 
 /** The account and administration routes Cloud's own web pages use, validated against the contract. */
 export function createCloudPortalClient(options: CloudPortalClientOptions = {}) {
-  const request = createCloudRequest(options)
+  const call = createCloudCall(options)
+  const routes = createPortalRouteClients(options)
   return {
-    ...createAccountAPI(request),
-    ...createAdministrationAPI(request)
+    ...createAccountAPI(call, routes),
+    ...createAdministrationAPI(call, routes)
   }
 }
 

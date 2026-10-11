@@ -15,17 +15,21 @@ import type { CloudAPIEnvironment } from '#cloud/server/api'
 import type { CloudAuthAdapter } from '#cloud/server/auth'
 import type { CloudDatabase } from '#cloud/server/db'
 import { CLOUD_RATE_LIMITS, createActorRateLimiter } from '#cloud/server/rate-limit'
-import { validatedJSON } from '#cloud/server/validation'
+import { validatedJSON, validatedQuery } from '#cloud/server/validation'
 import { Hono } from 'hono'
 import { NoResultError, type Kysely } from 'kysely'
 import * as v from 'valibot'
 
-const countSchema = v.pipe(v.string(), v.digits(), v.toNumber())
-
 /** A count from the query string; anything but digits is a bad request, not a NaN query. */
-function queryCount(value: string | undefined, fallback: number): number {
-  return value === undefined ? fallback : v.parse(countSchema, value)
-}
+const countSchema = v.optional(v.pipe(v.string(), v.digits(), v.toNumber()))
+const parseEnrollmentQuery = (input: unknown) =>
+  v.parse(v.object({ status: v.optional(enrollmentStatusSchema) }), input)
+const parseUserQuery = (input: unknown) =>
+  v.parse(
+    v.object({ search: v.optional(v.string()), limit: countSchema, offset: countSchema }),
+    input
+  )
+const parseLimitQuery = (input: unknown) => v.parse(v.object({ limit: countSchema }), input)
 
 export type CloudAdminServices = {
   email: AdminEmailService
@@ -87,11 +91,11 @@ export function createCloudAdminRoutes(
       }
       throw error
     })
-    .get('/enrollments', async (context) => {
-      const statusValue = context.req.query('status')
-      const status = statusValue ? v.parse(enrollmentStatusSchema, statusValue) : undefined
-      return context.json({ enrollments: await services.enrollment.list(status) })
-    })
+    .get('/enrollments', validatedQuery(parseEnrollmentQuery), async (context) =>
+      context.json({
+        enrollments: await services.enrollment.list(context.req.valid('query').status)
+      })
+    )
     .post('/enrollments/:id/approve', validatedJSON(parseEnrollmentReview), async (context) =>
       context.json({
         enrollment: await services.enrollment.review(
@@ -122,15 +126,16 @@ export function createCloudAdminRoutes(
         )
       })
     )
-    .get('/users', async (context) =>
-      context.json(
+    .get('/users', validatedQuery(parseUserQuery), async (context) => {
+      const query = context.req.valid('query')
+      return context.json(
         await services.users.list(context.req.raw.headers, {
-          searchValue: context.req.query('search'),
-          limit: queryCount(context.req.query('limit'), 100),
-          offset: queryCount(context.req.query('offset'), 0)
+          searchValue: query.search,
+          limit: query.limit ?? 100,
+          offset: query.offset ?? 0
         })
       )
-    )
+    })
     .post('/users/ban', validatedJSON(parseUserMutation), async (context) => {
       const input = context.req.valid('json')
       await services.users.ban(
@@ -165,19 +170,22 @@ export function createCloudAdminRoutes(
       )
       return context.json({ ok: true as const })
     })
-    .get('/email', async (context) =>
+    .get('/email', validatedQuery(parseLimitQuery), async (context) =>
       context.json({
-        messages: await services.email.list(queryCount(context.req.query('limit'), 100))
+        messages: await services.email.list(context.req.valid('query').limit ?? 100)
       })
     )
     .post('/email/:id/regenerate', async (context) => {
       await services.email.regenerate(context.get('actor').userId, context.req.param('id'))
       return context.json({ ok: true as const })
     })
-    .get('/audit', async (context) =>
+    .get('/audit', validatedQuery(parseLimitQuery), async (context) =>
       context.json({
-        events: await services.audit.list(queryCount(context.req.query('limit'), 100))
+        events: await services.audit.list(context.req.valid('query').limit ?? 100)
       })
     )
     .get('/operations', async (context) => context.json(await services.operations.summary()))
 }
+
+/** The administration routes' types, for the portal's typed client. */
+export type CloudAdminRoutes = ReturnType<typeof createCloudAdminRoutes>

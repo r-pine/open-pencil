@@ -1,3 +1,4 @@
+import type { CloudAdminRoutes } from '#cloud/admin/api/routes'
 import type { CloudFetch } from '#cloud/client/discovery'
 import {
   accountSecurityErrorResponseSchema,
@@ -5,6 +6,9 @@ import {
   type AccountSecurityErrorCode,
   type AdminErrorCode
 } from '#cloud/contract'
+import type { CloudAccountRoutes } from '#cloud/server/account/routes'
+import type { CloudAPI } from '#cloud/server/api'
+import { hc } from 'hono/client'
 import * as v from 'valibot'
 
 export type CloudPortalAPIErrorKind =
@@ -34,32 +38,33 @@ export type CloudPortalClientOptions = {
   timeoutMs?: number
 }
 
-export type CloudRequest = <Output>(
-  path: string,
+/** The parts of a response the portal reads; the typed Hono clients' responses have them. */
+type PortalResponse = Pick<Response, 'ok' | 'status' | 'json'>
+
+/** Sends one request with the call's `init` (its signal); the typed Hono clients fit this shape. */
+export type CloudSend = (options: { init: RequestInit }) => Promise<PortalResponse>
+
+export type CloudCall = <Output>(
+  send: CloudSend,
   schema: v.GenericSchema<unknown, Output>,
-  init?: RequestInit
+  signal?: AbortSignal
 ) => Promise<Output>
 
-export function createCloudRequest(options: CloudPortalClientOptions = {}): CloudRequest {
-  const baseURL = options.baseURL
-  const requestFetch = options.fetch ?? globalThis.fetch
+/**
+ * Sends a request and reads its answer the same way for every portal route: transport failures,
+ * missing sessions and permissions, and domain errors become `CloudPortalAPIError`, and a success
+ * body is checked against the contract.
+ */
+export function createCloudCall(options: CloudPortalClientOptions = {}): CloudCall {
   const timeoutMs = options.timeoutMs ?? 10_000
-  return async (path, schema, init = {}) => {
-    const headers = new Headers(init.headers)
-    headers.set('Accept', 'application/json')
-    if (init.body) headers.set('Content-Type', 'application/json')
+  return async (send, schema, callerSignal) => {
     const timeout = AbortSignal.timeout(timeoutMs)
-    const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout
-    let response: Response
+    const signal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout
+    let response: PortalResponse
     try {
-      response = await requestFetch(new URL(`/api${path}`, baseURL ?? globalThis.location.origin), {
-        ...init,
-        credentials: 'include',
-        headers,
-        signal
-      })
+      response = await send({ init: { signal } })
     } catch (cause) {
-      if (init.signal?.aborted) throw new CloudPortalAPIError('cancelled', undefined, { cause })
+      if (callerSignal?.aborted) throw new CloudPortalAPIError('cancelled', undefined, { cause })
       if (timeout.aborted) throw new CloudPortalAPIError('timeout', undefined, { cause })
       throw new CloudPortalAPIError('network', undefined, { cause })
     }
@@ -86,3 +91,20 @@ export function createCloudRequest(options: CloudPortalClientOptions = {}): Clou
     return parsed.output
   }
 }
+
+/** Typed clients for the routes the portal calls, all on the server's own address. */
+export function createPortalRouteClients(options: CloudPortalClientOptions = {}) {
+  const origin = options.baseURL ?? globalThis.location.origin
+  const clientOptions = {
+    fetch: options.fetch,
+    headers: { Accept: 'application/json' },
+    init: { credentials: 'include' as const }
+  }
+  return {
+    account: hc<CloudAccountRoutes>(origin, clientOptions).api.account,
+    admin: hc<CloudAdminRoutes>(new URL('/api/admin', origin).href, clientOptions),
+    api: hc<CloudAPI>(new URL('/api', origin).href, clientOptions)
+  }
+}
+
+export type PortalRouteClients = ReturnType<typeof createPortalRouteClients>

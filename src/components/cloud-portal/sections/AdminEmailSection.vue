@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref, shallowRef } from 'vue'
+import { computed } from 'vue'
 
 import { useCloudPortalMessages, useI18n } from '@open-pencil/vue'
 
 import { usePortal } from '@/app/cloud-portal/context'
-import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
 import { portalDate } from '@/app/cloud-portal/format'
+import { usePortalAction, usePortalLoad } from '@/app/cloud-portal/state'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 
 import PortalEmailDelivery from '../console/PortalEmailDelivery.vue'
@@ -14,10 +14,6 @@ import type { PortalEmail } from '../types'
 const portal = usePortal()
 const messages = useCloudPortalMessages()
 const { locale } = useI18n()
-const failures = usePortalFailureMessages()
-const emails = shallowRef<PortalEmail[]>([])
-const busy = ref<string | null>(null)
-const error = ref<string | null>(null)
 
 function deliveryStatus(status: string): PortalEmail['status'] {
   if (status === 'accepted') return 'sent'
@@ -26,38 +22,32 @@ function deliveryStatus(status: string): PortalEmail['status'] {
   return 'waiting'
 }
 
-async function load() {
-  try {
-    const { messages: rows } = await portal.api.email()
-    emails.value = rows.map((row) => ({
-      id: row.id,
-      kind: row.kind,
-      recipient: row.recipientEmailNormalized,
-      status: deliveryStatus(row.status),
-      attempts: row.attemptCount,
-      when: portalDate(row.nextAttemptAt, locale.value),
-      error: row.lastErrorCode
-    }))
-    error.value = null
-  } catch (cause) {
-    error.value = failures.api(cause)
-  }
-}
+const {
+  data: emails,
+  error: loadError,
+  reload
+} = usePortalLoad(async (): Promise<PortalEmail[]> => {
+  const { messages: rows } = await portal.api.email()
+  return rows.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    recipient: row.recipientEmailNormalized,
+    status: deliveryStatus(row.status),
+    attempts: row.attemptCount,
+    when: portalDate(row.nextAttemptAt, locale.value),
+    error: row.lastErrorCode
+  }))
+}, [])
 
-async function retry(id: string) {
-  busy.value = id
-  error.value = null
-  try {
-    await portal.api.regenerateEmail(id)
-    await load()
-  } catch (cause) {
-    error.value = failures.api(cause)
-  } finally {
-    busy.value = null
-  }
-}
-
-onMounted(load)
+const {
+  subject: busy,
+  error: retryError,
+  run: retry
+} = usePortalAction(async (id: string) => {
+  await portal.api.regenerateEmail(id)
+  await reload()
+})
+const error = computed(() => retryError.value ?? loadError.value)
 </script>
 
 <template>

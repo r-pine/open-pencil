@@ -6,6 +6,7 @@ import { useCloudPortalMessages } from '@open-pencil/vue'
 
 import { usePortal } from '@/app/cloud-portal/context'
 import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
+import { usePortalAction } from '@/app/cloud-portal/state'
 import PortalDeviceApproval from '@/components/cloud-portal/auth/PortalDeviceApproval.vue'
 import PortalNotice from '@/components/cloud-portal/auth/PortalNotice.vue'
 import AppButton from '@/components/ui/button/AppButton.vue'
@@ -19,8 +20,6 @@ const code = computed(() =>
   typeof route.query.user_code === 'string' ? route.query.user_code.trim().toUpperCase() : ''
 )
 const state = ref<'checking' | 'pending' | 'approved' | 'denied' | 'expired'>('checking')
-const deciding = ref(false)
-const error = ref<string | null>(null)
 
 onMounted(async () => {
   if (!code.value) {
@@ -31,19 +30,18 @@ onMounted(async () => {
   state.value = result.ok ? result.value : 'expired'
 })
 
-async function decide(decision: 'approve' | 'deny') {
-  deciding.value = true
-  error.value = null
-  try {
-    const result = await portal.auth.decideDevice(code.value, decision)
-    if (result.ok) state.value = decision === 'approve' ? 'approved' : 'denied'
-    // Only a refused code ends the approval; anything else leaves it to try again.
-    else if (result.failure === 'invalid-code') state.value = 'expired'
-    else error.value = failure(result.failure)
-  } finally {
-    deciding.value = false
-  }
-}
+const {
+  busy: deciding,
+  error,
+  run: decide,
+  fail
+} = usePortalAction(async (decision: 'approve' | 'deny') => {
+  const result = await portal.auth.decideDevice(code.value, decision)
+  if (result.ok) state.value = decision === 'approve' ? 'approved' : 'denied'
+  // Only a refused code ends the approval; anything else leaves it to try again.
+  else if (result.failure === 'invalid-code') state.value = 'expired'
+  else fail(failure(result.failure))
+})
 </script>
 
 <template>

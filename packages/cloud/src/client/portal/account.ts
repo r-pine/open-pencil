@@ -3,113 +3,112 @@ import {
   cloudAccountStatusResponseSchema,
   cloudAuthenticationMethodsResponseSchema,
   cloudMFAEnableResponseSchema,
-  cloudMFAEnableSchema,
   cloudMFARecoveryCodesResponseSchema,
   cloudMFAStatusResponseSchema,
   cloudMFAVerifyResponseSchema,
-  cloudMFAVerifySchema,
-  cloudPasskeyDeleteSchema,
   cloudPasskeysResponseSchema,
-  cloudPasswordChangeSchema,
-  cloudSocialLinkResponseSchema,
-  cloudSocialLinkSchema,
-  cloudUnlinkAuthenticationMethodSchema
+  cloudSocialLinkResponseSchema
 } from '#cloud/contract'
-import * as v from 'valibot'
 
-import type { CloudRequest } from './request'
+import type { CloudCall, PortalRouteClients } from './request'
 
-export function createAccountAPI(request: CloudRequest) {
+export function createAccountAPI(call: CloudCall, { account }: PortalRouteClients) {
   return {
     accountStatus(signal?: AbortSignal) {
-      return request('/account/status', cloudAccountStatusResponseSchema, { signal })
+      return call(
+        (options) => account.status.$get(undefined, options),
+        cloudAccountStatusResponseSchema,
+        signal
+      )
     },
     authenticationMethods(signal?: AbortSignal) {
-      return request('/account/authentication', cloudAuthenticationMethodsResponseSchema, {
+      return call(
+        (options) => account.authentication.$get(undefined, options),
+        cloudAuthenticationMethodsResponseSchema,
         signal
-      })
+      )
     },
     mfaStatus(signal?: AbortSignal) {
-      return request('/account/mfa', cloudMFAStatusResponseSchema, { signal })
+      return call(
+        (options) => account.mfa.$get(undefined, options),
+        cloudMFAStatusResponseSchema,
+        signal
+      )
     },
     enableTOTP(password?: string, signal?: AbortSignal) {
-      return request('/account/mfa/totp/enable', cloudMFAEnableResponseSchema, {
-        method: 'POST',
-        body: JSON.stringify(v.parse(cloudMFAEnableSchema, { password })),
+      return call(
+        (options) => account.mfa.totp.enable.$post({ json: { password } }, options),
+        cloudMFAEnableResponseSchema,
         signal
-      })
+      )
     },
     verifyTOTP(code: string, signal?: AbortSignal) {
-      return request('/account/mfa/totp/verify', cloudMFAVerifyResponseSchema, {
-        method: 'POST',
-        body: JSON.stringify(v.parse(cloudMFAVerifySchema, { code })),
+      return call(
+        (options) => account.mfa.totp.verify.$post({ json: { code } }, options),
+        cloudMFAVerifyResponseSchema,
         signal
-      })
+      )
     },
     verifyRecoveryCode(code: string, signal?: AbortSignal) {
-      return request('/account/mfa/recovery/verify', cloudMFAVerifyResponseSchema, {
-        method: 'POST',
-        body: JSON.stringify(v.parse(cloudMFAVerifySchema, { code })),
+      return call(
+        (options) => account.mfa.recovery.verify.$post({ json: { code } }, options),
+        cloudMFAVerifyResponseSchema,
         signal
-      })
+      )
     },
     regenerateRecoveryCodes(password?: string, signal?: AbortSignal) {
-      return request('/account/mfa/recovery/regenerate', cloudMFARecoveryCodesResponseSchema, {
-        method: 'POST',
-        body: JSON.stringify(v.parse(cloudMFAEnableSchema, { password })),
+      return call(
+        (options) => account.mfa.recovery.regenerate.$post({ json: { password } }, options),
+        cloudMFARecoveryCodesResponseSchema,
         signal
-      })
+      )
     },
     disableTOTP(password?: string, signal?: AbortSignal) {
-      return request('/account/mfa/totp/disable', cloudAccountMutationResponseSchema, {
-        method: 'POST',
-        body: JSON.stringify(v.parse(cloudMFAEnableSchema, { password })),
+      return call(
+        (options) => account.mfa.totp.disable.$post({ json: { password } }, options),
+        cloudAccountMutationResponseSchema,
         signal
-      })
+      )
     },
     passkeys(signal?: AbortSignal) {
-      return request('/account/mfa/passkeys', cloudPasskeysResponseSchema, { signal })
+      return call(
+        (options) => account.mfa.passkeys.$get(undefined, options),
+        cloudPasskeysResponseSchema,
+        signal
+      )
     },
     deletePasskey(id: string, signal?: AbortSignal) {
-      return request('/account/mfa/passkeys/delete', cloudAccountMutationResponseSchema, {
-        method: 'POST',
-        body: JSON.stringify(v.parse(cloudPasskeyDeleteSchema, { id })),
+      return call(
+        (options) => account.mfa.passkeys.delete.$post({ json: { id } }, options),
+        cloudAccountMutationResponseSchema,
         signal
-      })
+      )
     },
     changePassword(currentPassword: string, newPassword: string, signal?: AbortSignal) {
-      return request(
-        '/account/authentication/change-password',
-        cloudAccountMutationResponseSchema,
-        {
-          method: 'POST',
-          body: JSON.stringify(
-            v.parse(cloudPasswordChangeSchema, { currentPassword, newPassword })
+      return call(
+        (options) =>
+          account.authentication['change-password'].$post(
+            { json: { currentPassword, newPassword } },
+            options
           ),
-          signal
-        }
+        cloudAccountMutationResponseSchema,
+        signal
       )
     },
     linkSocial(provider: 'google' | 'apple', callbackURL: string, signal?: AbortSignal) {
-      return request('/account/authentication/link-social', cloudSocialLinkResponseSchema, {
-        method: 'POST',
-        body: JSON.stringify(v.parse(cloudSocialLinkSchema, { provider, callbackURL })),
+      return call(
+        (options) =>
+          account.authentication['link-social'].$post({ json: { provider, callbackURL } }, options),
+        cloudSocialLinkResponseSchema,
         signal
-      })
+      )
     },
     unlinkAuthenticationMethod(methodId: string, signal?: AbortSignal) {
-      return request('/account/authentication/unlink', cloudAccountMutationResponseSchema, {
-        method: 'POST',
-        body: JSON.stringify(v.parse(cloudUnlinkAuthenticationMethodSchema, { methodId })),
+      return call(
+        (options) => account.authentication.unlink.$post({ json: { methodId } }, options),
+        cloudAccountMutationResponseSchema,
         signal
-      })
-    },
-    requestPasswordReset(email: string, redirectTo: string, signal?: AbortSignal) {
-      return request('/auth/request-password-reset', v.object({ status: v.boolean() }), {
-        method: 'POST',
-        body: JSON.stringify({ email, redirectTo }),
-        signal
-      })
+      )
     }
   }
 }
