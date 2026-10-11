@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useLocalStorage, useOnline } from '@vueuse/core'
+import { computedAsync, useLocalStorage, useOnline } from '@vueuse/core'
 import { computed, shallowRef, watch } from 'vue'
 
 import { useCloudMessages, useDocumentWorkspace, useI18n } from '@open-pencil/vue'
@@ -59,43 +59,43 @@ const files = useDocumentWorkspace<StorageDocument>({
   refreshInterval: 60_000,
   previewConcurrency: 6
 })
-const metas = shallowRef<ReadonlyMap<string, LocalCanvasMeta>>(new Map())
-const usage = shallowRef<{ usedBytes: number; totalBytes: number | null } | null>(null)
-
-async function readLocal() {
+// Both reads re-run when the workspace or its files change; a slower earlier read never
+// overwrites a newer one.
+const metas = computedAsync<ReadonlyMap<string, LocalCanvasMeta>>(async () => {
   const requested = location.value
+  // Read before the await, so the sync engine's progress re-runs this too.
+  void [files.documents.value, syncUIState.value, pendingSyncCount.value]
   const all = await getLocalCanvasStore().listMetas(true)
   const here = all.filter((meta) => sameStorageLocation(storageLocationOf(meta), requested))
-  metas.value = new Map(here.map((meta) => [meta.id, meta]))
-}
+  return new Map(here.map((meta) => [meta.id, meta]))
+}, new Map())
 
-async function readUsage() {
+const usage = computedAsync<{ usedBytes: number; totalBytes: number | null } | null>(async () => {
+  void files.documents.value
+  const workspaceId = workspace.id
   const server = findCloudServer(serverId)
   const discovery = cloudConnection(serverId).discovery
-  if (!server || !discovery) return
+  if (!server || !discovery) return null
   try {
     const { limits, usage: used } = await cloudAPIClient(
       server,
       discovery
-    ).getWorkspaceEntitlements(workspace.id)
-    usage.value = { usedBytes: used.committedStorageBytes, totalBytes: limits.maximumStorageBytes }
+    ).getWorkspaceEntitlements(workspaceId)
+    return { usedBytes: used.committedStorageBytes, totalBytes: limits.maximumStorageBytes }
   } catch {
     // Usage is a detail; the files still list without it.
-    usage.value = null
+    return null
   }
-}
+}, null)
 
 watch(location, () => {
   fallback.value = []
-  usage.value = null
   void files.refresh()
 })
-watch([files.documents, syncUIState, pendingSyncCount], () => void readLocal(), { immediate: true })
 watch(
   files.documents,
   (documents) => {
     for (const document of documents) void files.loadPreview(document.id)
-    void readUsage()
   },
   { immediate: true }
 )

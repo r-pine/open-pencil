@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { useLocalStorage } from '@vueuse/core'
-import { computed, onMounted, ref, shallowRef } from 'vue'
+import { useAsyncState, useLocalStorage } from '@vueuse/core'
+import { computed } from 'vue'
 
 import type { SharedDocument } from '@open-pencil/cloud/contract'
 import { useCloudMessages, useI18n } from '@open-pencil/vue'
@@ -25,23 +25,26 @@ const { locale } = useI18n()
 const t = useCloudMessages()
 const now = useCommentClock()
 const view = useLocalStorage<'grid' | 'list'>('open-pencil:home-files-view', 'grid')
-const documents = shallowRef<SharedDocument[]>([])
-const state = ref<'loading' | 'ready' | 'error'>('loading')
-
-async function refresh() {
-  const server = findCloudServer(serverId)
-  const discovery = cloudConnection(serverId).discovery
-  if (!server || !discovery) return
-  state.value = 'loading'
-  try {
-    documents.value = await cloudAPIClient(server, discovery).listSharedDocuments()
-    state.value = 'ready'
-  } catch {
-    state.value = 'error'
-  }
-}
-
-onMounted(refresh)
+const {
+  state: documents,
+  isLoading,
+  error,
+  execute: refresh
+} = useAsyncState(
+  async (): Promise<SharedDocument[]> => {
+    const server = findCloudServer(serverId)
+    const discovery = cloudConnection(serverId).discovery
+    if (!server || !discovery) return []
+    return cloudAPIClient(server, discovery).listSharedDocuments()
+  },
+  [],
+  // Keep the last list on screen while it reloads.
+  { resetOnExecute: false }
+)
+const state = computed(() => {
+  if (isLoading.value) return 'loading'
+  return error.value ? 'error' : 'ready'
+})
 
 const rows = computed<CloudDocumentRow[]>(() =>
   documents.value.map((document) => ({
