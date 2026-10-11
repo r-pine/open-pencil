@@ -5,7 +5,7 @@ description: Keep documents on OpenPencil Cloud or your team's own server, share
 
 # OpenPencil Cloud
 
-OpenPencil Cloud keeps documents on a server so they follow you across devices and several people can edit them at once. Use the hosted service at `cloud.openpencil.dev` or a server your team runs itself. Cloud is optional: documents on your device and in your own [storage bucket](./cloud-storage) work the same with or without it.
+OpenPencil Cloud keeps documents on a server so they follow you across devices and several people can edit them at once. Use the hosted service at `cloud.openpencil.dev` or a server your team runs itself ([self-hosting guide](/reference/self-hosting-cloud)). Cloud is optional: documents on your device and in your own [storage bucket](./cloud-storage) work the same with or without it.
 
 ## Connect a Server
 

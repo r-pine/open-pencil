@@ -108,6 +108,7 @@ export const referenceSidebar = (
       { text: labels.figmaMatrix, link: `${prefix}/reference/figma-compatibility` },
       ...(!prefix ? [{ text: 'DOM/CSS Mapping', link: '/reference/dom-css-mapping' }] : []),
       { text: 'File Format', link: '/reference/file-format' },
+      { text: 'Self-hosting Cloud', link: '/reference/self-hosting-cloud' },
     ],
   },
 ]

@@ -106,6 +106,9 @@ export async function startNodeCloudServer(options: NodeCloudServerOptions = {})
     : undefined
   const portalDirectory = environment.OPENPENCIL_CLOUD_PORTAL_DIR
   const portal = portalDirectory ? createNodeCloudPortal(portalDirectory) : undefined
+  // Without the portal build, sign-in, account, and administration pages answer 404.
+  if (!portal)
+    console.warn('[Cloud] OPENPENCIL_CLOUD_PORTAL_DIR is not set; sign-in pages are off.')
   const server = await listen(
     async (request) => {
       const path = new URL(request.url).pathname
