@@ -69,9 +69,11 @@ const description = computed(() => {
   return descriptions[active.value]
 })
 
+/** The waiting-requests badge; when it can't be read, it keeps its last count. */
 async function refreshWaiting() {
   if (!admin.value) return
-  waiting.value = (await portal.api.operations()).pendingEnrollment
+  const operations = await portal.api.operations().catch(() => null)
+  if (operations) waiting.value = operations.pendingEnrollment
 }
 
 function select(id: string) {
@@ -85,7 +87,7 @@ async function signOut() {
   await router.replace({ name: 'sign-in' })
 }
 
-onMounted(() => void refreshWaiting().catch(() => undefined))
+onMounted(() => void refreshWaiting())
 </script>
 
 <template>

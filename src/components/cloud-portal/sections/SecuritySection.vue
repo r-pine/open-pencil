@@ -118,23 +118,40 @@ function withPassword(step: Exclude<PasswordStep, 'change'>) {
 async function finishPasswordStep(step: PasswordStep, password: string | undefined, next = '') {
   busy.value = true
   passwordError.value = null
+  let setup: { totpURI: string; backupCodes: string[] } | null = null
+  let codes: string[] | null = null
   try {
     if (step === 'change') await portal.api.changePassword(password ?? '', next)
-    else if (step === 'enable-authenticator') {
-      const enabled = await portal.api.enableTOTP(password)
-      setupURI.value = enabled.totpURI
-      recoveryCodes.value = null
-      pendingCodes = enabled.backupCodes
-    } else if (step === 'disable-authenticator') await portal.api.disableTOTP(password)
-    else recoveryCodes.value = (await portal.api.regenerateRecoveryCodes(password)).backupCodes
-    passwordStep.value = null
-    await load()
+    else if (step === 'enable-authenticator') setup = await portal.api.enableTOTP(password)
+    else if (step === 'disable-authenticator') await portal.api.disableTOTP(password)
+    else codes = (await portal.api.regenerateRecoveryCodes(password)).backupCodes
   } catch (cause) {
     if (passwordStep.value) passwordError.value = failures.api(cause)
     else error.value = failures.api(cause)
+    busy.value = false
+    return
+  }
+  // The step succeeded: close the password dialog before showing what comes next.
+  passwordStep.value = null
+  if (setup) {
+    recoveryCodes.value = null
+    pendingCodes = setup.backupCodes
+    setupURI.value = setup.totpURI
+  }
+  if (codes) recoveryCodes.value = codes
+  try {
+    await load()
+  } catch (cause) {
+    error.value = failures.api(cause)
   } finally {
     busy.value = false
   }
+}
+
+/** Closing setup before the code is verified leaves the authenticator off, so its codes go too. */
+function closeAuthenticatorSetup() {
+  setupURI.value = null
+  pendingCodes = []
 }
 
 let pendingCodes: string[] = []
@@ -211,7 +228,7 @@ onMounted(() => void run(async () => undefined))
       :uri="setupURI"
       :error="setupError"
       :verifying="busy"
-      @update:open="(open) => !open && (setupURI = null)"
+      @update:open="(open) => !open && closeAuthenticatorSetup()"
       @verify="verifyAuthenticator"
     />
     <PortalRecoveryCodes

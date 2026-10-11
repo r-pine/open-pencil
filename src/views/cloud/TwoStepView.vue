@@ -37,8 +37,14 @@ async function verify(code: string) {
 }
 
 async function passkey() {
+  if (verifying.value) return
+  verifying.value = true
   error.value = null
-  await finish(await portal.auth.withPasskey())
+  try {
+    await finish(await portal.auth.withPasskey())
+  } finally {
+    verifying.value = false
+  }
 }
 </script>
 

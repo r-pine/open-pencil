@@ -70,7 +70,13 @@ const code = ref('')
       <AppButton size="xs" variant="link" @click="emit('switchMethod')">
         {{ method === 'authenticator' ? messages.useRecoveryCode : messages.useAuthenticator }}
       </AppButton>
-      <AppButton v-if="passkeys" size="xs" variant="link" @click="emit('passkey')">
+      <AppButton
+        v-if="passkeys"
+        size="xs"
+        variant="link"
+        :disabled="verifying"
+        @click="emit('passkey')"
+      >
         {{ messages.usePasskey }}
       </AppButton>
     </div>

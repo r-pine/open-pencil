@@ -5,25 +5,36 @@ import { useRoute, useRouter } from 'vue-router'
 import { useCloudPortalMessages } from '@open-pencil/vue'
 
 import { usePortal } from '@/app/cloud-portal/context'
+import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
 import { continuationPath, continuationURL } from '@/app/cloud-portal/navigation'
 import PortalNotice from '@/components/cloud-portal/auth/PortalNotice.vue'
 import AppButton from '@/components/ui/button/AppButton.vue'
+import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 
 const portal = usePortal()
 const route = useRoute()
 const router = useRouter()
 const messages = useCloudPortalMessages()
+const { failure } = usePortalFailureMessages()
 const email = computed(() => (typeof route.query.email === 'string' ? route.query.email : ''))
 const redirect = computed(() => continuationPath(route.query.redirect))
 const state = ref<'idle' | 'sending' | 'sent'>('idle')
+const error = ref<string | null>(null)
 
 async function sendAgain() {
   state.value = 'sending'
-  await portal.auth.resendVerification(
+  error.value = null
+  const result = await portal.auth.resendVerification(
     email.value,
     continuationURL('/auth/sign-in', redirect.value)
   )
-  state.value = 'sent'
+  if (result.ok) {
+    state.value = 'sent'
+    return
+  }
+  // Nothing was sent, so the button stays available to try again.
+  state.value = 'idle'
+  error.value = failure(result.failure)
 }
 </script>
 
@@ -34,6 +45,7 @@ async function sendAgain() {
     :description="messages.checkEmailDescription({ email })"
   >
     <template #icon><icon-lucide-mail-check class="size-5" /></template>
+    <AppAlert v-if="error" tone="error" :heading="messages.errorTitle" :description="error" />
     <template #actions>
       <AppButton
         variant="outline"

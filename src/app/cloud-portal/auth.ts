@@ -136,8 +136,17 @@ export function createPortalAuth(discovery: CloudDiscovery, options: { captcha?:
     },
 
     async decideDevice(userCode: string, decision: 'approve' | 'deny'): Promise<PortalAuthResult> {
-      const result = await auth.device[decision]({ userCode })
-      return result.error || !result.data?.success
+      const result = await auth.device[decision]({ userCode }).catch(() => null)
+      if (!result) return { ok: false, failure: 'unavailable' }
+      const { error } = result
+      const status =
+        error && 'status' in error && typeof error.status === 'number' ? error.status : undefined
+      if (status === 429) return { ok: false, failure: 'rate-limited' }
+      // A code that is unknown, used, or expired is refused with a 4xx; anything else can be retried.
+      if (status !== undefined && (status < 400 || status >= 500)) {
+        return { ok: false, failure: 'unavailable' }
+      }
+      return error || !result.data?.success
         ? { ok: false, failure: 'invalid-code' }
         : done(undefined)
     },

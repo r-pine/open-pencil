@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useCloudPortalMessages } from '@open-pencil/vue'
 
 import { usePortal } from '@/app/cloud-portal/context'
+import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
 import PortalDeviceApproval from '@/components/cloud-portal/auth/PortalDeviceApproval.vue'
 import PortalNotice from '@/components/cloud-portal/auth/PortalNotice.vue'
 import AppButton from '@/components/ui/button/AppButton.vue'
@@ -13,11 +14,13 @@ const portal = usePortal()
 const route = useRoute()
 const router = useRouter()
 const messages = useCloudPortalMessages()
+const { failure } = usePortalFailureMessages()
 const code = computed(() =>
   typeof route.query.user_code === 'string' ? route.query.user_code.trim().toUpperCase() : ''
 )
 const state = ref<'checking' | 'pending' | 'approved' | 'denied' | 'expired'>('checking')
 const deciding = ref(false)
+const error = ref<string | null>(null)
 
 onMounted(async () => {
   if (!code.value) {
@@ -30,10 +33,16 @@ onMounted(async () => {
 
 async function decide(decision: 'approve' | 'deny') {
   deciding.value = true
-  const result = await portal.auth.decideDevice(code.value, decision)
-  deciding.value = false
-  if (!result.ok) state.value = 'expired'
-  else state.value = decision === 'approve' ? 'approved' : 'denied'
+  error.value = null
+  try {
+    const result = await portal.auth.decideDevice(code.value, decision)
+    if (result.ok) state.value = decision === 'approve' ? 'approved' : 'denied'
+    // Only a refused code ends the approval; anything else leaves it to try again.
+    else if (result.failure === 'invalid-code') state.value = 'expired'
+    else error.value = failure(result.failure)
+  } finally {
+    deciding.value = false
+  }
 }
 </script>
 
@@ -44,6 +53,7 @@ async function decide(decision: 'approve' | 'deny') {
     :code="code"
     :email="portal.account.value.user.email"
     :deciding="deciding"
+    :error="error"
     @approve="decide('approve')"
     @deny="decide('deny')"
   />

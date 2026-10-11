@@ -48,6 +48,20 @@ describe('portal access rules', () => {
     expect(portalDestination(security, account('revoked'))).toBe('/account/closed')
   })
 
+  test('standing pages belong only to the accounts they describe', () => {
+    const pending = target('/account/pending', { account: true })
+    const closed = target('/account/closed', { account: true })
+    expect(portalDestination(pending, account('pending'))).toBe(true)
+    expect(portalDestination(closed, account('revoked'))).toBe(true)
+    expect(portalDestination(closed, account('pending'))).toBe('/account/pending')
+    expect(portalDestination(closed, account('active'))).toBe('/account')
+    expect(portalDestination(pending, account('active'))).toBe('/account')
+    expect(portalDestination(closed, null)).toEqual({
+      name: 'sign-in',
+      query: { redirect: '/account/closed' }
+    })
+  })
+
   test('console pages ask for a deployment administrator', () => {
     const adminPage = target('/admin/people', { account: true, admin: true })
     expect(portalDestination(adminPage, account('active'))).toBe('/account')

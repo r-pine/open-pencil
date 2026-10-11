@@ -50,7 +50,7 @@ watch(open, (value) => {
     />
     <form novalidate @submit.prevent="emit('submit', { current, next })">
       <AppDialogBody :ui="{ body: 'flex flex-col gap-3' }">
-        <AppAlert v-if="error" tone="error" :heading="messages.signInFailed" :description="error" />
+        <AppAlert v-if="error" tone="error" :heading="messages.errorTitle" :description="error" />
         <div :class="ui.field()">
           <label for="portal-current-password" :class="ui.label()">
             {{ messages.currentPassword }}

@@ -7,6 +7,7 @@ import { useCloudPortalMessages, useI18n } from '@open-pencil/vue'
 import { usePortal } from '@/app/cloud-portal/context'
 import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
 import { portalDate } from '@/app/cloud-portal/format'
+import { latestRequest } from '@/app/cloud-portal/latest'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 
 import PortalPeople from '../console/PortalPeople.vue'
@@ -22,9 +23,13 @@ const search = refDebounced(query, 250)
 const people = shallowRef<PortalPerson[]>([])
 const error = ref<string | null>(null)
 
+const startLoad = latestRequest()
+
 async function load() {
+  const isLatest = startLoad()
   try {
     const { users, total } = await portal.api.users(search.value.trim() || undefined)
+    if (!isLatest()) return
     const you = portal.account.value?.user.userId
     people.value = users.map((user) => ({
       id: user.id,
@@ -36,8 +41,9 @@ async function load() {
       you: user.id === you
     }))
     emit('total', total)
+    error.value = null
   } catch (cause) {
-    error.value = failures.api(cause)
+    if (isLatest()) error.value = failures.api(cause)
   }
 }
 

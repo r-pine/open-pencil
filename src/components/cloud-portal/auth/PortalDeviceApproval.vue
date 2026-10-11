@@ -14,13 +14,16 @@ const {
   host,
   code,
   email,
-  deciding = false
+  deciding = false,
+  error = null
 } = defineProps<{
   host: string
   code: string
   /** The signed-in account the app would use. */
   email: string
   deciding?: boolean
+  /** Why the last approval or denial didn't go through; the person can try again. */
+  error?: string | null
 }>()
 const emit = defineEmits<{ approve: []; deny: [] }>()
 const messages = useCloudPortalMessages()
@@ -36,6 +39,7 @@ const messages = useCloudPortalMessages()
       <span class="text-[11px] text-muted">{{ messages.deviceCheckCode }}</span>
       <span class="font-mono text-xl tracking-[0.3em] text-surface">{{ code }}</span>
     </div>
+    <AppAlert v-if="error" tone="error" :heading="messages.errorTitle" :description="error" />
     <AppAlert
       tone="warning"
       :heading="messages.deviceWarningTitle"

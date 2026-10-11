@@ -30,6 +30,8 @@ const STANDING_PATHS: Record<CloudAccountStatus['state'], string | null> = {
   revoked: '/account/closed'
 }
 
+const STANDING_PAGES = new Set(Object.values(STANDING_PATHS))
+
 /** The page an account in this standing belongs on, or null when it may go anywhere. */
 export function standingPath(account: CloudAccountStatus | null): string | null {
   if (!account) return null
@@ -58,6 +60,8 @@ export function portalDestination(
   if (!account) return { name: 'sign-in', query: { redirect: to.fullPath } }
   const standing = standingPath(account)
   if (standing && to.path !== standing) return standing
+  // An active account has nothing waiting or declined to read about.
+  if (!standing && STANDING_PAGES.has(to.path)) return PORTAL_HOME
   if (to.meta.admin && account.user.deploymentRole !== 'admin') return PORTAL_HOME
   return true
 }

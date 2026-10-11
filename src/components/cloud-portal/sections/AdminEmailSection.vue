@@ -35,8 +35,10 @@ async function load() {
       recipient: row.recipientEmailNormalized,
       status: deliveryStatus(row.status),
       attempts: row.attemptCount,
-      when: portalDate(row.nextAttemptAt, locale.value)
+      when: portalDate(row.nextAttemptAt, locale.value),
+      error: row.lastErrorCode
     }))
+    error.value = null
   } catch (cause) {
     error.value = failures.api(cause)
   }

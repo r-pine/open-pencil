@@ -6,6 +6,7 @@ import { useCloudPortalMessages, useI18n } from '@open-pencil/vue'
 import { usePortal } from '@/app/cloud-portal/context'
 import { usePortalFailureMessages } from '@/app/cloud-portal/failure'
 import { portalDate } from '@/app/cloud-portal/format'
+import { latestRequest } from '@/app/cloud-portal/latest'
 import AppAlert from '@/components/ui/feedback/AppAlert.vue'
 
 import PortalAccessRequests from '../console/PortalAccessRequests.vue'
@@ -21,9 +22,13 @@ const requests = shallowRef<AccessRequest[]>([])
 const busy = ref<string | null>(null)
 const error = ref<string | null>(null)
 
+const startLoad = latestRequest()
+
 async function load() {
+  const isLatest = startLoad()
   try {
     const { enrollments } = await portal.api.enrollments(filter.value)
+    if (!isLatest()) return
     requests.value = enrollments.map((enrollment) => ({
       id: enrollment.id,
       name: enrollment.name,
@@ -33,8 +38,9 @@ async function load() {
       status: enrollment.status,
       reviewedBy: enrollment.reviewedBy
     }))
+    error.value = null
   } catch (cause) {
-    error.value = failures.api(cause)
+    if (isLatest()) error.value = failures.api(cause)
   }
 }
 

@@ -115,6 +115,7 @@ async function start(project: string): Promise<void> {
   )
   await execute(['bunx', 'portless', 'alias', aliasName(mailURL), String(mailpitUIPort), '--force'])
 
+  const betterAuthSecret = await authSecret()
   // The server serves the portal's pages from this build, rebuilt on every change.
   const portal = Bun.spawn(['bun', 'run', 'build:cloud-portal', '--watch'], {
     cwd: root,
@@ -126,33 +127,36 @@ async function start(project: string): Promise<void> {
   console.warn(`Captured email:  ${mailURL}`)
   console.warn('Stop the services with `bun run cloud:dev:down`; their data is kept.')
 
-  const exitCode = await execute(
-    [
-      'bunx',
-      'portless',
-      'run',
-      '--name',
-      'cloud.open-pencil',
-      'bun',
-      '--watch',
-      'packages/cloud/src/runtime/node/main.ts'
-    ],
-    {
-      allowFailure: true,
-      environment: {
-        ...process.env,
-        HOST: '127.0.0.1',
-        OPENPENCIL_CLOUD_CONFIG: generatedConfig,
-        OPENPENCIL_CLOUD_PORTAL_DIR: join(root, 'dist-cloud-portal'),
-        DATABASE_URL: `postgresql://openpencil:${POSTGRES_PASSWORD}@127.0.0.1:${postgresPort}/openpencil`,
-        BETTER_AUTH_SECRET: await authSecret(),
-        S3_ACCESS_KEY_ID,
-        S3_SECRET_ACCESS_KEY
+  try {
+    process.exitCode = await execute(
+      [
+        'bunx',
+        'portless',
+        'run',
+        '--name',
+        'cloud.open-pencil',
+        'bun',
+        '--watch',
+        'packages/cloud/src/runtime/node/main.ts'
+      ],
+      {
+        allowFailure: true,
+        environment: {
+          ...process.env,
+          HOST: '127.0.0.1',
+          OPENPENCIL_CLOUD_CONFIG: generatedConfig,
+          OPENPENCIL_CLOUD_PORTAL_DIR: join(root, 'dist-cloud-portal'),
+          DATABASE_URL: `postgresql://openpencil:${POSTGRES_PASSWORD}@127.0.0.1:${postgresPort}/openpencil`,
+          BETTER_AUTH_SECRET: betterAuthSecret,
+          S3_ACCESS_KEY_ID,
+          S3_SECRET_ACCESS_KEY
+        }
       }
-    }
-  )
-  portal.kill()
-  process.exitCode = exitCode
+    )
+  } finally {
+    // The watcher stops with the server however the server ends.
+    portal.kill()
+  }
 }
 
 async function stop(project: string): Promise<void> {
