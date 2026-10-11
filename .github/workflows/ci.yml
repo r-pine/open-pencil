@@ -304,9 +304,38 @@ jobs:
       - name: Typecheck and run Cloud unit and integration tests
         run: bun run test:cloud
 
+  cloud-storage:
+    name: Cloud storage — ${{ matrix.store }}
+    needs: changes
+    if: needs.changes.outputs.scope == 'code'
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # PostgreSQL and SeaweedFS: object-store checks, then the full revision flow.
+          - store: SeaweedFS
+            script: test:e2e
+          # Garage's S3 compatibility for the object-store checks.
+          - store: Garage
+            script: test:e2e:garage
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Generate package declarations
+        run: bun run build:packages
+
+      - name: Run Cloud end-to-end tests against ${{ matrix.store }}
+        run: bun --filter @open-pencil/cloud ${{ matrix.script }}
+
   result:
     name: CI result
-    needs: [changes, commit-messages, documentation, source-quality, package-quality, repository-quality, storybook, native-test-contracts, unit-tests, feedback-tests, cloud-tests]
+    needs: [changes, commit-messages, documentation, source-quality, package-quality, repository-quality, storybook, native-test-contracts, unit-tests, feedback-tests, cloud-tests, cloud-storage]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 3

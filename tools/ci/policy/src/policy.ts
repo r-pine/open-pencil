@@ -28,7 +28,8 @@ export const CODE_JOBS = [
   'native-test-contracts',
   'unit-tests',
   'feedback-tests',
-  'cloud-tests'
+  'cloud-tests',
+  'cloud-storage'
 ] as const
 export const DOCS_JOB = 'documentation'
 export const ALWAYS_JOBS = ['commit-messages'] as const
