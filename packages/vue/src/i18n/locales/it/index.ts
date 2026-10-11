@@ -2,8 +2,8 @@ import type { ComponentsJSON } from '@nanostores/i18n'
 
 import ai from './ai.json'
 import automation from './automation.json'
-import cloudPortal from './cloud-portal.json'
-import cloud from './cloud.json'
+import cloud from './cloud/editor.json'
+import cloudPortal from './cloud/portal.json'
 import code from './code.json'
 import collaboration from './collaboration.json'
 import commands from './commands.json'
@@ -26,8 +26,8 @@ import settings from './settings.json'
 import storage from './storage.json'
 import tools from './tools.json'
 import updates from './updates.json'
-import variableTypes from './variable-types.json'
-import variables from './variables.json'
+import variables from './variables/panel.json'
+import variableTypes from './variables/types.json'
 
 export default {
   ai,
