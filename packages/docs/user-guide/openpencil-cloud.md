@@ -78,6 +78,6 @@ An invitation link opens OpenPencil with who invited you, to which document, and
 
 ## Edit Together
 
-Opening a Cloud document joins its live session: everyone who has it open sees each other's cursors and edits as they happen, and can start a voice call from the avatars. One person's app saves the document for everyone, so editing together never makes your changes conflict with someone else's.
+Opening a Cloud document joins its live session: everyone who has it open sees each other's cursors and edits as they happen. One person's app saves the document for everyone, so editing together never makes your changes conflict with someone else's.
 
 People who open a link without an account join under the name OpenPencil gives them, or the one they chose. They edit when the link allows it, but their app never saves to the server; someone signed in who can edit saves for them.

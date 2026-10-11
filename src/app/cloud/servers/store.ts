@@ -87,8 +87,12 @@ export async function addCloudServer(input: {
   if (!url) throw new TypeError('Cloud server address is invalid')
   const existing = state.value.servers.find((server) => server.url === url)
   if (existing) return existing
+  const id = await cloudServerId(url)
+  // A second call for the same address may have added it while the id was computed.
+  const added = state.value.servers.find((server) => server.url === url)
+  if (added) return added
   const server: CloudServer = {
-    id: await cloudServerId(url),
+    id,
     url,
     kind: input.kind,
     account: null,

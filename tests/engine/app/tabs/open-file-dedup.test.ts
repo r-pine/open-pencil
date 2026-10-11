@@ -56,7 +56,7 @@ function acknowledgePendingPresentation(): void {
 
 type FileOpenOutcome = { status: 'fulfilled' } | { status: 'rejected'; reason: unknown }
 
-async function settleFileOpen(opening: Promise<void>): Promise<void> {
+async function settleFileOpen(opening: Promise<unknown>): Promise<void> {
   const outcome: Promise<FileOpenOutcome> = opening.then(
     () => ({ status: 'fulfilled' }),
     (reason: unknown) => ({ status: 'rejected', reason })

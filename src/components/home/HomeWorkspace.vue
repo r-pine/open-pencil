@@ -9,6 +9,7 @@ import { CLOUD_STORAGE_PROVIDER_ID } from '@/app/cloud/sessions/token'
 import { useHomeLocations } from '@/app/home/locations'
 import {
   activeStorageProviderID,
+  createStorageAdapter,
   readStoragePreferences,
   storagePreferencesComplete,
   sameStorageLocation,
@@ -168,9 +169,14 @@ async function openRecent(document: RecentDocument): Promise<void> {
       return
     }
     const location = storageLocationOf(document)
-    const listed = sameStorageLocation(location, activeStorageLocation())
-      ? storageDocuments.value.find((candidate) => candidate.id === document.documentId)
-      : undefined
+    // The listing carries the revision that tells whether this device's copy is still current;
+    // offline, the copy opens as it is.
+    const listing = sameStorageLocation(location, activeStorageLocation())
+      ? storageDocuments.value
+      : await createStorageAdapter(location)
+          .listDocuments()
+          .catch(() => [])
+    const listed = listing.find((candidate) => candidate.id === document.documentId)
     await openStorageDocumentInNewTab(
       listed ?? { id: document.documentId, name: document.name, updatedAt: document.updatedAt },
       location

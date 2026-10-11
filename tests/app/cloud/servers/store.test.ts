@@ -38,6 +38,15 @@ describe('Cloud servers', () => {
     expect(cloudServers.value).toHaveLength(1)
   })
 
+  test('add a server once when two sign-ins for it overlap', async () => {
+    const [first, second] = await Promise.all([
+      addCloudServer({ kind: 'self-hosted', url: 'design.acme.example' }),
+      addCloudServer({ kind: 'self-hosted', url: 'design.acme.example' })
+    ])
+    expect(second.id).toBe(first.id)
+    expect(cloudServers.value).toHaveLength(1)
+  })
+
   test('put the first server on Home and move Home on when it is removed', async () => {
     const official = await addCloudServer({ kind: 'official' })
     const team = await addCloudServer({ kind: 'self-hosted', url: 'design.acme.example' })

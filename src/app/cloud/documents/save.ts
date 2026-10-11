@@ -94,6 +94,8 @@ function waitForFirstUpload(documentId: string, totalBytes: number): Promise<boo
         if (event.documentId === documentId) void check()
       })
     )
+    // A small file can finish uploading before these watchers exist.
+    void check()
   })
 }
 

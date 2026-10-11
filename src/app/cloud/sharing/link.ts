@@ -7,7 +7,7 @@ import { randomHex } from '@open-pencil/scene-graph/random'
 import { useCollabIdentity } from '@/app/collab/identity'
 import { downloadCloudRevision } from '@/app/integrations/storage/cloud/download'
 import { storageFetch } from '@/app/integrations/storage/s3/fetch'
-import { getActiveStore, openFileInNewTab } from '@/app/tabs'
+import { getTabForStore, openFileInNewTab } from '@/app/tabs'
 import { IS_BROWSER } from '@/constants'
 
 import { cloudRelayTransport, openCloudDocumentRoom, stopWithTab } from '../rooms/live'
@@ -39,13 +39,13 @@ export async function openCloudShareLink(link: CloudShareLink): Promise<void> {
   const { document } = await client.getSharedDocument(link.shareId, input)
   const bytes = await downloadCloudRevision(document, (input, init) => storageFetch(input, init))
   const name = document.document.name
-  await openFileInNewTab(
+  const store = await openFileInNewTab(
     new File([Uint8Array.from(bytes)], `${name}.fig`, { type: 'application/octet-stream' })
   )
-  const store = getActiveStore()
   if (!discovery.capabilities.collaboration) return
   const first = await client.getSharedCollaborationTicket(link.shareId, input)
-  if (first.provider !== 'relay' || !first.serverURL) return
+  // The tab may have closed while the ticket was on its way.
+  if (first.provider !== 'relay' || !first.serverURL || !getTabForStore(store)) return
   const room = openCloudDocumentRoom(store, {
     roomId: first.roomId,
     transport: cloudRelayTransport(first.serverURL, first, () =>

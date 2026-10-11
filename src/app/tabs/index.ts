@@ -410,7 +410,7 @@ export async function openFileInNewTab(
   file: File,
   handle?: FileSystemFileHandle,
   path?: string
-): Promise<void> {
+): Promise<EditorStore> {
   const identity: DocumentSourceIdentity = {
     handle: handle ?? null,
     path: path ?? null
@@ -420,7 +420,7 @@ export async function openFileInNewTab(
     if (pending) {
       const tab = getTabForStore(pending.store)
       if (tab) switchTab(tab.id)
-      return { kind: 'pending' as const, completion: pending.completion }
+      return { kind: 'pending' as const, completion: pending.completion, store: pending.store }
     }
 
     const existing = await findTabByFileIdentity(tabsRef.value, identity)
@@ -432,7 +432,7 @@ export async function openFileInNewTab(
           console.warn('[Recent files] Failed to cache the Cover thumbnail', error)
         })
       }
-      return { kind: 'existing' as const }
+      return { kind: 'existing' as const, store: existing.store }
     }
 
     const { store, created } = reusableTabStore()
@@ -449,10 +449,10 @@ export async function openFileInNewTab(
     return { kind: 'owner' as const, completion, pendingOpen, store, created, load }
   })
 
-  if (decision.kind === 'existing') return
+  if (decision.kind === 'existing') return decision.store
   if (decision.kind === 'pending') {
     await decision.completion
-    return
+    return decision.store
   }
 
   const { completion, pendingOpen, store, created, load } = decision
@@ -462,7 +462,7 @@ export async function openFileInNewTab(
       await store.openDOMFile(file, { handle, path, preparation: load })
       completion.resolve(undefined)
       succeeded = true
-      return
+      return store
     }
 
     await yieldToUI()
@@ -500,6 +500,7 @@ export async function openFileInNewTab(
     }
     completion.resolve(undefined)
     succeeded = true
+    return store
   } catch (error) {
     failPreparation(load, 'decode-failed', error)
     completion.reject(error)

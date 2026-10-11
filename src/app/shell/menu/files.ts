@@ -46,9 +46,9 @@ fileDialog.onChange((files) => {
  * Opens a picked or dropped document in a new tab, rejecting formats OpenPencil cannot read.
  * A file system handle, when the browser provides one, lets the tab save back to the file.
  */
-export function openDesignFile(file: File, handle?: FileSystemFileHandle): Promise<void> {
+export async function openDesignFile(file: File, handle?: FileSystemFileHandle): Promise<void> {
   assertSupportedDesignFile(file.name)
-  return openFileInNewTab(file, handle)
+  await openFileInNewTab(file, handle)
 }
 
 if (IS_BROWSER && 'window' in globalThis) {

@@ -11,7 +11,7 @@ import { createStorageAdapter } from '@/app/integrations/storage'
 import { getLocalCanvasStore } from '@/app/storage/local-store'
 import { dropCanvasUploads, kickSyncEngine, replaceStoredVersion } from '@/app/storage/sync'
 import { onStorageWorkspaceEvent } from '@/app/storage/workspace/events'
-import { allTabs, getTabsSnapshot } from '@/app/tabs'
+import { allTabs, getTabForStore, getTabsSnapshot } from '@/app/tabs'
 
 import { isCloudBinding } from '../documents/status'
 import { cloudConnections } from '../sessions/connection'
@@ -190,9 +190,9 @@ export async function startCloudRoom(store: EditorStore): Promise<void> {
   starting.add(store)
   try {
     const first = await target.client.getCollaborationTicket(binding.documentId)
-    if (first.provider !== 'relay' || !first.serverURL || store.getStorageBinding() !== binding) {
-      return
-    }
+    // The document may have moved, or its tab closed, while the ticket was on its way.
+    const current = store.getStorageBinding() === binding && getTabForStore(store)
+    if (first.provider !== 'relay' || !first.serverURL || !current) return
     const room = openCloudDocumentRoom(store, {
       roomId: first.roomId,
       transport: cloudRelayTransport(first.serverURL, first, () =>

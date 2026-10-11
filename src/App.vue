@@ -3,7 +3,7 @@ import { useHead } from '@unhead/vue'
 import { useEventListener } from '@vueuse/core'
 import { MotionConfig } from 'motion-v'
 import { TooltipProvider } from 'reka-ui'
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { provideEditor, useI18n } from '@open-pencil/vue'
@@ -56,7 +56,7 @@ onMounted(() => {
   toast.setupGlobalErrorHandler()
   scheduleStartupUpdateCheck(updates)
   void kickSyncEngine()
-  watchCloudRooms()
+  onUnmounted(watchCloudRooms())
   void startCloudSessions({
     leaveLinkAddress: () => router.isReady().then(() => router.replace('/'))
   })

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { omit } from 'es-toolkit'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -79,7 +80,10 @@ onMounted(() => {
   const provider = authentication.value.socialProviders.find(
     (candidate) => candidate === route.query.provider
   )
-  if (provider && !error.value && mode.value === 'sign-in') void withProvider(provider)
+  if (!provider || error.value || mode.value !== 'sign-in') return
+  // Without the provider in the address, Back from the provider's page shows this page again
+  // instead of sending the person straight back to the provider.
+  void router.replace({ query: omit(route.query, ['provider']) }).then(() => withProvider(provider))
 })
 
 function switchMode() {
