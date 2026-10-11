@@ -138,6 +138,7 @@ export async function saveToCloud(): Promise<boolean> {
     cloudSaveState.value = { kind: 'error', reason: 'offline' }
     return false
   }
+  const previousName = store.state.documentName
   store.state.documentName = name
   cloudSaveState.value = { kind: 'saving', sentBytes: 0, totalBytes: 0 }
   const location = {
@@ -146,6 +147,8 @@ export async function saveToCloud(): Promise<boolean> {
     containerId: workspaceId
   }
   if (!(await store.saveFigFileToStorage(location))) {
+    // Nothing was saved, so the tab keeps the name it had.
+    store.state.documentName = previousName
     cloudSaveState.value = { kind: 'error', reason: 'unavailable' }
     return false
   }

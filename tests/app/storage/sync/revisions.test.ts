@@ -31,6 +31,8 @@ function revisionedProvider() {
   const documents = new Map<string, { bytes: Uint8Array; revision: string; name: string }>()
   let counter = 0
   const writes: { id: string; base: string | null }[] = []
+  // The Cloud adapter can report a conflict without being able to name the newer revision.
+  let conflictsNameRevision = true
   const adapter: StorageAdapter = {
     async testConnection() {
       return { ok: true, message: '' }
@@ -53,7 +55,7 @@ function revisionedProvider() {
       const base = options?.baseRevision ?? null
       writes.push({ id, base })
       if (current && current.revision !== base) {
-        throw new StorageRevisionConflictError(current.revision)
+        throw new StorageRevisionConflictError(conflictsNameRevision ? current.revision : null)
       }
       counter += 1
       documents.set(id, { bytes, revision: `r${counter}`, name: metadata.name })
@@ -70,6 +72,9 @@ function revisionedProvider() {
     adapter,
     documents,
     writes,
+    hideConflictRevisions() {
+      conflictsNameRevision = false
+    },
     /** Someone else saves a new revision on the provider. */
     saveElsewhere(id: string, bytes: Uint8Array) {
       counter += 1
@@ -211,6 +216,20 @@ describe('storage revisions', () => {
       remoteRevision: 'r3',
       conflictRevision: null
     })
+  })
+
+  test('replacing looks up the newer revision when the conflict could not name it', async () => {
+    provider.hideConflictRevisions()
+    await save('canvas-1', [1])
+    provider.saveElsewhere('canvas-1', new Uint8Array([9]))
+    await save('canvas-1', [1, 2])
+    expect(await store.getMeta('canvas-1')).toMatchObject({ conflictRevision: null })
+
+    await replaceStoredVersion('canvas-1')
+    await drain()
+
+    expect([...(provider.documents.get('canvas-1')?.bytes ?? [])]).toEqual([1, 2])
+    expect(await store.getMeta('canvas-1')).toMatchObject({ syncStatus: 'synced' })
   })
 
   test('refuses to resolve a document that has no conflict', async () => {

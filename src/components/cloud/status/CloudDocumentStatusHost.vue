@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useObjectUrl } from '@vueuse/core'
 import { computed, ref, shallowRef } from 'vue'
+import { useRouter } from 'vue-router'
 
 import { useCloudMessages, useI18n } from '@open-pencil/vue'
 
@@ -8,11 +9,13 @@ import { openCloudConnect } from '@/app/cloud/connect/flow'
 import { resolveCloudConflict, type CloudConflictChoice } from '@/app/cloud/documents/conflict'
 import { useCloudDocumentStatus } from '@/app/cloud/documents/status'
 import { cloudRoomPermissions } from '@/app/cloud/rooms/live'
+import { showCloudServerOnHome } from '@/app/cloud/servers/store'
 import { cloudConnection } from '@/app/cloud/sessions/connection'
 import { cloudShareOpen } from '@/app/cloud/sharing/dialog'
 import { formatCommentTime, useCommentClock } from '@/app/comments/time'
 import { useEditorStore } from '@/app/editor/active-store'
 import { createStorageAdapter } from '@/app/integrations/storage'
+import { openHomeLocation } from '@/app/shell/menu/navigation'
 import { toast } from '@/app/shell/ui'
 import { getLocalCanvasStore } from '@/app/storage/local-store'
 import { resumeStorageSync } from '@/app/storage/sync'
@@ -22,6 +25,7 @@ import CloudDocumentStatus from './CloudDocumentStatus.vue'
 
 /** The open document's Cloud status beside its name, and the choice when it conflicts. */
 const store = useEditorStore()
+const router = useRouter()
 const { locale } = useI18n()
 const t = useCloudMessages()
 const now = useCommentClock()
@@ -63,6 +67,14 @@ async function confirm(picked: CloudConflictChoice) {
   }
 }
 
+/** Home lists one server's workspaces at a time, so it switches to this document's server. */
+function openWorkspace() {
+  const binding = store.getStorageBinding()
+  if (!binding?.profileId || !binding.containerId) return
+  showCloudServerOnHome(binding.profileId)
+  openHomeLocation(router, { kind: 'workspace', id: binding.containerId })
+}
+
 function retry() {
   const serverId = location.value?.serverId
   if (serverId && cloudConnection(serverId).state !== 'signed-in') {
@@ -84,6 +96,7 @@ function retry() {
       @resolve="openConflict"
       @share="cloudShareOpen = true"
       @retry="retry"
+      @open-workspace="openWorkspace"
     />
     <CloudConflictDialog
       v-model:open="resolving"

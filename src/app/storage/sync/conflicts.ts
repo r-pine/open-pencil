@@ -74,9 +74,16 @@ export async function keepBothVersions(canvasId: string, copyName: string): Prom
 /** Uploads this device's edits over the provider's newer revision. */
 export async function replaceStoredVersion(canvasId: string): Promise<void> {
   const { store, meta } = await conflictedCanvas(canvasId)
+  // Replacing builds on the provider's newest revision; a conflict that couldn't name it is
+  // looked up first, or the upload would build on the old base and conflict again.
+  const newest =
+    meta.conflictRevision ??
+    (await createStorageAdapter(storageLocationOf(meta)).listDocuments()).find(
+      (document) => document.id === canvasId
+    )?.revision
   await store.updateMeta(canvasId, {
     syncStatus: 'pending',
-    remoteRevision: meta.conflictRevision ?? meta.remoteRevision ?? null,
+    remoteRevision: newest ?? meta.remoteRevision ?? null,
     conflictRevision: null,
     lastSyncError: null
   })

@@ -123,14 +123,18 @@ async function finishSignIn(server: CloudServer): Promise<void> {
 export async function signInToCloudServer(method: CloudSignInMethod): Promise<void> {
   const target = checked.value
   if (!target) return
+  // Changing the server or cancelling starts a new generation; this attempt then stops.
+  const attempt = generation
   cloudConnectError.value = null
   const server = await addCloudServer({ kind: target.kind, url: target.url })
+  if (attempt !== generation) return
   if (cloudSignInRoute(target.discovery) === 'redirect') {
     redirectToCloudSignIn(server.id, target.discovery, method)
     return
   }
   cloudConnectStep.value = 'device'
   const signedIn = await device.start(server.id, target.discovery, cloudFetch)
+  if (attempt !== generation) return
   if (signedIn) {
     await finishSignIn(server)
     return

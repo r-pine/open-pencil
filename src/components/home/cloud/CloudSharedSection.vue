@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useAsyncState, useLocalStorage } from '@vueuse/core'
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 
 import type { SharedDocument } from '@open-pencil/cloud/contract'
 import { useCloudMessages, useI18n } from '@open-pencil/vue'
@@ -40,6 +40,14 @@ const {
   [],
   // Keep the last list on screen while it reloads.
   { resetOnExecute: false }
+)
+// Home's server can change under this list; another server's documents never stay listed.
+watch(
+  () => serverId,
+  () => {
+    documents.value = []
+    void refresh()
+  }
 )
 const state = computed(() => {
   if (isLoading.value) return 'loading'

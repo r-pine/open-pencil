@@ -53,13 +53,18 @@ const members = computed(() =>
   }))
 )
 
+// Each read is numbered so a slower earlier one never replaces a newer one.
+let latestRead = 0
+
 async function refresh() {
   const current = target.value
   if (!current) return
+  const read = ++latestRead
   try {
-    sharing.value = await readCloudSharing(current)
+    const next = await readCloudSharing(current)
+    if (read === latestRead && target.value?.documentId === current.documentId) sharing.value = next
   } catch {
-    toast.error(t.value.shareLoadFailed)
+    if (read === latestRead) toast.error(t.value.shareLoadFailed)
   }
 }
 
@@ -102,9 +107,14 @@ async function copyLink() {
   if (url) await copy(url)
 }
 
-watch(cloudShareOpen, (open) => {
-  if (open) void refresh()
-})
+// Another document's members and link never show, or take changes, while this one's load.
+watch(
+  () => [cloudShareOpen.value, target.value?.documentId] as const,
+  ([open], previous) => {
+    if (target.value?.documentId !== previous?.[1]) sharing.value = null
+    if (open) void refresh()
+  }
+)
 </script>
 
 <template>

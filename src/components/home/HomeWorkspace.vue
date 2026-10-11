@@ -230,10 +230,12 @@ function formattedDate(updatedAt: string): string {
       v-if="places.workspace.value && places.serverId.value"
       :server-id="places.serverId.value"
       :workspace="places.workspace.value"
+      :query="normalizedQuery"
     />
     <CloudSharedSection
       v-else-if="places.location.value.kind === 'shared' && places.serverId.value"
       :server-id="places.serverId.value"
+      :query="normalizedQuery"
     />
     <template v-else>
       <p
