@@ -56,7 +56,7 @@ Either way, the desktop app connects to the server directly, and the web editor 
 
 ## The first administrator
 
-Set `authentication.enrollment_mode = "approval"` for a controlled deployment: a verified identity then creates a pending request that an administrator reviews. Startup never grants roles, so bootstrap the first operator from a repository checkout that reads the same configuration and secrets:
+Set `authentication.enrollment_mode = "approval"` for a controlled deployment: a verified identity then creates a pending request that an administrator reviews. Startup never grants roles, so bootstrap the first operator from a repository checkout that reads the same configuration and secrets and can reach the server's database at `DATABASE_URL`:
 
 ```sh
 bun --filter @open-pencil/cloud admin approve owner@example.com
