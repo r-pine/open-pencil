@@ -2,7 +2,12 @@ import { describe, expect, test } from 'bun:test'
 
 import { createCloudTestDatabase } from '#cloud-tests/helpers/database'
 import { connectTestClient, until } from '#cloud-tests/helpers/relay'
-import { COLLAB_ACTIONS, RELAY_SERVER_PEER } from '#cloud/contract'
+import {
+  COLLAB_ACTIONS,
+  decodeRoomUpdate,
+  MAX_COLLAB_MESSAGE_BYTES,
+  RELAY_SERVER_PEER
+} from '#cloud/contract'
 import {
   createCollaborationRelay,
   createCollaborationStateStore,
@@ -73,7 +78,7 @@ describe('collaboration relay with issued tickets', () => {
         type: 'message',
         namespace: COLLAB_ACTIONS.yjsUpdate,
         target: null,
-        payload: Y.encodeStateAsUpdate(document)
+        payload: Y.encodeStateAsUpdateV2(document)
       })
       editor.connection.closed()
       await first.close()
@@ -97,10 +102,11 @@ describe('collaboration relay with issued tickets', () => {
       })
       await until(() => viewer.messages(COLLAB_ACTIONS.syncReply).length > 0)
       const restored = new Y.Doc()
-      Y.applyUpdate(
-        restored,
-        viewer.messages(COLLAB_ACTIONS.syncReply)[0]?.payload ?? new Uint8Array()
+      const reply = decodeRoomUpdate(
+        viewer.messages(COLLAB_ACTIONS.syncReply)[0]?.payload ?? new Uint8Array(),
+        { limit: MAX_COLLAB_MESSAGE_BYTES, compressed: true }
       )
+      if (reply) Y.applyUpdateV2(restored, reply)
       expect(restored.getText('t').toString()).toBe('saved')
       await second.close()
     } finally {

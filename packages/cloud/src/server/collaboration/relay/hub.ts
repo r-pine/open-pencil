@@ -1,7 +1,10 @@
 import {
   COLLAB_ACTIONS,
+  encodeSyncReply,
   decodeRelayClientFrame,
+  decodeRoomUpdate,
   encodeRelayServerFrame,
+  MAX_COLLAB_MESSAGE_BYTES,
   RELAY_CLOSE,
   RELAY_SERVER_PEER,
   type RelayServerFrame
@@ -133,9 +136,21 @@ export function createCollaborationRelay(options: CollaborationRelayOptions) {
     room.persistTimer ??= setTimeout(() => void persist(room), persistDelayMs)
   }
 
-  function applyToRoom(room: Room, peer: Peer, update: Uint8Array): boolean {
+  /**
+   * Applies a peer's V2 update to the room, inflated first for a sync reply. Rooms are saved as
+   * V1 updates; only what peers exchange is V2.
+   */
+  function applyToRoom(room: Room, peer: Peer, namespace: string, payload: Uint8Array): boolean {
     try {
-      Y.applyUpdate(room.document, update, peer.id)
+      const update = decodeRoomUpdate(payload, {
+        limit: MAX_COLLAB_MESSAGE_BYTES,
+        compressed: namespace === COLLAB_ACTIONS.syncReply
+      })
+      if (!update) {
+        peer.socket.close(RELAY_CLOSE.messageTooLarge, 'Collaboration update is too large')
+        return false
+      }
+      Y.applyUpdateV2(room.document, update, peer.id)
       return true
     } catch {
       peer.socket.close(RELAY_CLOSE.protocol, 'Malformed document update')
@@ -162,7 +177,7 @@ export function createCollaborationRelay(options: CollaborationRelayOptions) {
     if (namespace === COLLAB_ACTIONS.syncStep1) {
       let reply: Uint8Array
       try {
-        reply = Y.encodeStateAsUpdate(room.document, payload)
+        reply = encodeSyncReply(room.document, payload)
       } catch {
         peer.socket.close(RELAY_CLOSE.protocol, 'Malformed state vector')
         return
@@ -174,7 +189,7 @@ export function createCollaborationRelay(options: CollaborationRelayOptions) {
         payload: reply
       })
     } else if (namespace === COLLAB_ACTIONS.syncReply) {
-      applyToRoom(room, peer, payload)
+      applyToRoom(room, peer, namespace, payload)
     }
   }
 
@@ -206,7 +221,7 @@ export function createCollaborationRelay(options: CollaborationRelayOptions) {
     }
     if (
       (namespace === COLLAB_ACTIONS.yjsUpdate || namespace === COLLAB_ACTIONS.syncReply) &&
-      !applyToRoom(room, peer, payload)
+      !applyToRoom(room, peer, namespace, payload)
     ) {
       return
     }

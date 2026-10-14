@@ -10,7 +10,14 @@ import {
   user,
   type RelayTicketOptions
 } from '#cloud-tests/helpers/relay'
-import { COLLAB_ACTIONS, RELAY_CLOSE, RELAY_SERVER_PEER } from '#cloud/contract'
+import {
+  COLLAB_ACTIONS,
+  decodeRoomUpdate,
+  encodeSyncReply,
+  MAX_COLLAB_MESSAGE_BYTES,
+  RELAY_CLOSE,
+  RELAY_SERVER_PEER
+} from '#cloud/contract'
 import { createCollaborationRelay, type CollaborationRelayOptions } from '#cloud/server'
 import * as awarenessProtocol from 'y-protocols/awareness'
 import * as Y from 'yjs'
@@ -52,12 +59,21 @@ async function join(
 function edit(text: string) {
   const document = new Y.Doc()
   document.getText('t').insert(0, text)
-  return Y.encodeStateAsUpdate(document)
+  return Y.encodeStateAsUpdateV2(document)
 }
 
-function textOf(update: Uint8Array) {
+/** What an editor holding `text` answers a sync request from an empty peer with. */
+function syncReply(text: string) {
   const document = new Y.Doc()
-  Y.applyUpdate(document, update)
+  document.getText('t').insert(0, text)
+  return encodeSyncReply(document, Y.encodeStateVector(new Y.Doc()))
+}
+
+/** The text a sync reply carries, which travels as a compressed V2 update. */
+function textOf(reply: Uint8Array) {
+  const document = new Y.Doc()
+  const update = decodeRoomUpdate(reply, { limit: MAX_COLLAB_MESSAGE_BYTES, compressed: true })
+  if (update) Y.applyUpdateV2(document, update)
   return document.getText('t').toString()
 }
 
@@ -114,6 +130,29 @@ describe('collaboration relay', () => {
       RELAY_SERVER_PEER
     ])
     expect(viewer.messages(COLLAB_ACTIONS.syncStep1)).toEqual([])
+  })
+
+  test('takes an editor’s compressed answer into the room', async () => {
+    const { relay: hub } = relay()
+    const editor = await join(hub)
+    editor.send({
+      type: 'message',
+      namespace: COLLAB_ACTIONS.syncReply,
+      target: RELAY_SERVER_PEER,
+      payload: syncReply('offline')
+    })
+    expect(editor.closed).toBeNull()
+
+    const bob = await join(hub)
+    bob.send({
+      type: 'message',
+      namespace: COLLAB_ACTIONS.syncStep1,
+      target: RELAY_SERVER_PEER,
+      payload: Y.encodeStateVector(new Y.Doc())
+    })
+    expect(textOf(bob.messages(COLLAB_ACTIONS.syncReply)[0]?.payload ?? new Uint8Array())).toBe(
+      'offline'
+    )
   })
 
   test('forwards editor messages to everyone or to the named peer', async () => {

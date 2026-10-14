@@ -70,11 +70,6 @@ import type { Color } from '@open-pencil/scene-graph/primitives'
  */
 export const COLLAB_APP_ID = 'openpencil/5'
 
-/**
- * The most a room message may decode to, compressed or not. A peer's update past it is dropped
- * before it is decoded, so a small compressed reply cannot expand without bound.
- */
-export const MAX_COLLAB_MESSAGE_BYTES = 256 * 1024 * 1024
 // 32 base36 characters provide roughly 165 bits of entropy. The room ID is a
 // bearer credential and must resist offline enumeration from public signaling topics.
 export const ROOM_ID_LENGTH = 32
