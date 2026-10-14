@@ -12,6 +12,6 @@ export const homeLocationMenu = tv({
     itemLabel: 'min-w-0 flex-1 truncate',
     count: 'shrink-0 text-[11px] text-muted tabular-nums',
     check: 'size-3.5 shrink-0 text-surface',
-    attention: 'size-3.5 shrink-0 text-warning-text'
+    attention: 'size-3.5 shrink-0 text-warning'
   }
 })

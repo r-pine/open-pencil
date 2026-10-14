@@ -6,7 +6,7 @@
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-1 bg-app text-surface">
+  <div class="flex min-h-0 flex-1 bg-canvas text-surface">
     <div class="hidden md:flex">
       <slot name="sidebar" />
     </div>

@@ -35,7 +35,7 @@ const label = computed(
       <icon-lucide-cloud-off v-else-if="state === 'offline'" class="size-3" />
       <icon-lucide-git-compare-arrows
         v-else-if="state === 'conflict'"
-        class="size-3 text-warning-text"
+        class="size-3 text-warning"
       />
       <icon-lucide-circle-alert v-else class="size-3 text-error" />
     </span>
