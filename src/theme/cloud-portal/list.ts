@@ -13,6 +13,6 @@ export const portalList = tv({
     meta: 'hidden shrink-0 text-[11px] text-muted tabular-nums sm:block',
     actions: 'flex shrink-0 items-center gap-1',
     status:
-      'shrink-0 rounded px-1.5 py-px text-[10px] font-medium data-[tone=neutral]:bg-panel-field data-[tone=neutral]:text-muted data-[tone=success]:bg-success/10 data-[tone=success]:text-success data-[tone=warning]:bg-warning-bg data-[tone=warning]:text-warning-text data-[tone=error]:bg-error-bg data-[tone=error]:text-error'
+      'shrink-0 rounded px-1.5 py-px text-[10px] font-medium data-[tone=neutral]:bg-panel-field data-[tone=neutral]:text-muted data-[tone=success]:bg-success/10 data-[tone=success]:text-success data-[tone=warning]:bg-warning-bg data-[tone=warning]:text-warning data-[tone=error]:bg-error-bg data-[tone=error]:text-error'
   }
 })

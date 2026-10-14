@@ -12,6 +12,6 @@ export const sideList = tv({
     icon: 'size-3 shrink-0 opacity-70',
     label: 'min-w-0 flex-1 truncate',
     trailing: 'flex shrink-0 items-center gap-1.5 text-[10px] text-muted tabular-nums',
-    attention: 'size-3 text-warning-text'
+    attention: 'size-3 text-warning'
   }
 })

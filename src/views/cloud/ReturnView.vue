@@ -33,7 +33,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="flex h-full bg-app text-surface">
+  <main class="flex h-full bg-canvas text-surface">
     <AppPlaceholder size="page" :label="messages.loading">
       <template #icon>
         <icon-lucide-loader-circle class="size-5 animate-spin motion-reduce:animate-none" />

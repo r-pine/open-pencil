@@ -11,7 +11,7 @@ const reload = () => globalThis.location.reload()
 </script>
 
 <template>
-  <main class="flex h-full bg-app text-surface">
+  <main class="flex h-full bg-canvas text-surface">
     <AppPlaceholder
       size="page"
       label-as="h1"
