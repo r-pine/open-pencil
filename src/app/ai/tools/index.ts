@@ -11,6 +11,8 @@ import {
   type ToolDef
 } from '@open-pencil/core/tools'
 
+import { repeatedActionError } from '@/app/ai/chat/failure'
+import { resultWithAlreadyRanNote } from '@/app/ai/chat/loop'
 import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
 import { executeAtomicEditorTool } from '@/app/automation/execution/editor'
 import { recordToolCompleted, type AIDiagnosticContext } from '@/app/diagnostics/events/ai'
@@ -159,10 +161,31 @@ export function createAITools(store: EditorStore, diagnosticContext?: AIDiagnost
       },
       executeTool: async (def, figma, args, options) => {
         const run = currentRun(store)
-        if (!run.acceptToolCall(def.name, args)) {
-          return { error: 'Stopped because this action was already performed in this run.' }
+        const decision = run.claimToolCall(def.name, args)
+        // A repeat is not executed. The first successful one returns the stored
+        // result so the model can continue; the next identical one stops the run.
+        if (decision.kind === 'repeat') {
+          const previous = await decision.previous
+          if (!decision.succeeded() || decision.repeat >= 2) {
+            run.repeatedAction = true
+            return { error: repeatedActionError() }
+          }
+          return resultWithAlreadyRanNote(previous)
         }
-        return withUndoNote(await executeCall(def, figma, args, options), takeRunUndoNote(store))
+        let result: unknown
+        let failed: unknown
+        try {
+          result = withUndoNote(
+            await executeCall(def, figma, args, options),
+            takeRunUndoNote(store)
+          )
+          return result
+        } catch (error) {
+          failed = { error: error instanceof Error ? error.message : String(error) }
+          throw error
+        } finally {
+          decision.finish(failed ?? result)
+        }
       },
       onAfterExecute: (def) => {
         if (def.mutates && !isAtomicTool(def)) store.requestRender()

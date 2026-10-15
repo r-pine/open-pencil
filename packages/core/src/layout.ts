@@ -65,6 +65,10 @@ export function computeLayout(graph: SceneGraph, frameId: string): void {
 function computeLayoutInternal(graph: SceneGraph, frameId: string): void {
   const frame = graph.getNode(frameId)
   if (!frame || frame.layoutMode === 'NONE') return
+  // A .fig frame that still has the geometry the file saved does not need a Yoga tree.
+  // One edit otherwise rebuilds that tree for every auto-layout frame on the page, and
+  // the tab cannot pan until the rebuild finishes.
+  if (frame.source.format === 'fig' && keepsSavedLayout(graph, frame)) return
 
   const rootDirection = resolveComputedLayoutDirection(graph, frame)
   const yogaDirection = rootDirection === 'RTL' ? Direction.RTL : Direction.LTR
@@ -103,6 +107,25 @@ export function computeAllLayouts(graph: SceneGraph, scopeId?: string): void {
  */
 const COOPERATIVE_LAYOUT_NODES = 250
 const HEAVY_LAYOUT_CHILDREN = 60
+
+/** A subtree larger than this is laid out across turns, so a click can still pan. */
+export const COOPERATIVE_LAYOUT_THRESHOLD = 400
+
+/** True when `rootId` has more than `limit` layers under it, counting itself. Stops at the limit. */
+export function subtreeExceeds(graph: SceneGraph, rootId: string, limit: number): boolean {
+  let seen = 0
+  const stack = [rootId]
+  while (stack.length > 0) {
+    const id = stack.pop()
+    if (!id) continue
+    const node = graph.getNode(id)
+    if (!node) continue
+    seen++
+    if (seen > limit) return true
+    for (const childId of node.childIds) stack.push(childId)
+  }
+  return false
+}
 
 /**
  * Same bottom-up layout as `computeAllLayouts`, but each turn stays short enough that the tab

@@ -63,6 +63,16 @@ function collectVisibleLabels<
   return result
 }
 
+/** Past this many layers, rebuilding labels inside the edit's frame keeps the canvas from panning. */
+const DEFERRED_LABEL_GRAPH_NODES = 2500
+const LABEL_WALK_SLICE = 400
+
+function yieldTurn(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
 export class LabelCache {
   private sections: CachedSection[] = []
   private components: CachedComponent[] = []
@@ -71,6 +81,8 @@ export class LabelCache {
   private cachedSceneVersion = -1
   private cachedPositionPreviewVersion = -1
   private cachedPageId: string | null = null
+  private pendingKey: string | null = null
+  private rebuildToken = 0
 
   update(
     graph: SceneGraph,
@@ -85,7 +97,20 @@ export class LabelCache {
     ) {
       return
     }
-    this.rebuild(graph, pageId)
+    if (graph.nodes.size <= DEFERRED_LABEL_GRAPH_NODES) {
+      this.rebuild(graph, pageId)
+      this.remember(pageId, sceneVersion, positionPreviewVersion)
+      this.pendingKey = null
+      return
+    }
+    const key = `${pageId ?? ''}:${sceneVersion}:${positionPreviewVersion}`
+    if (this.pendingKey === key) return
+    this.pendingKey = key
+    const token = ++this.rebuildToken
+    void this.rebuildWhenIdle(graph, pageId, sceneVersion, positionPreviewVersion, token)
+  }
+
+  private remember(pageId: string | null, sceneVersion: number, positionPreviewVersion: number) {
     this.cachedSceneVersion = sceneVersion
     this.cachedPositionPreviewVersion = positionPreviewVersion
     this.cachedPageId = pageId
@@ -160,6 +185,91 @@ export class LabelCache {
 
   getAllComponents(): readonly CachedComponent[] {
     return this.components
+  }
+
+  private async rebuildWhenIdle(
+    graph: SceneGraph,
+    pageId: string | null,
+    sceneVersion: number,
+    positionPreviewVersion: number,
+    token: number
+  ) {
+    await yieldTurn()
+    if (token !== this.rebuildToken) return
+    const sections: CachedSection[] = []
+    const components: CachedComponent[] = []
+    const frames: CachedFrame[] = []
+    const componentSets: CachedFrame[] = []
+    const pageNode = graph.getNode(pageId ?? graph.rootId)
+    if (!pageNode) {
+      this.sections = []
+      this.components = []
+      this.frames = []
+      this.componentSets = []
+      this.remember(pageId, sceneVersion, positionPreviewVersion)
+      return
+    }
+    const stack: Array<{ parentId: string; insideSection: boolean; index: number }> = [
+      { parentId: pageNode.id, insideSection: false, index: 0 }
+    ]
+    let scanned = 0
+    while (stack.length > 0) {
+      if (token !== this.rebuildToken) return
+      const frame = stack[stack.length - 1]
+      if (!frame) break
+      const parent = graph.getNode(frame.parentId)
+      if (!parent || frame.index >= parent.childIds.length) {
+        stack.pop()
+        continue
+      }
+      const childId = parent.childIds[frame.index]
+      frame.index++
+      const child = childId ? graph.getNode(childId) : undefined
+      if (!child || !child.visible) continue
+      scanned++
+      if (child.type === 'SECTION') {
+        const origin = graph.getAbsolutePosition(child.id)
+        sections.push({
+          nodeId: child.id,
+          absX: origin.x,
+          absY: origin.y,
+          nested: frame.insideSection
+        })
+        stack.push({ parentId: child.id, insideSection: true, index: 0 })
+      } else if (LABEL_TYPES.has(child.type)) {
+        if (child.type === 'COMPONENT_SET') {
+          const origin = graph.getAbsolutePosition(child.id)
+          componentSets.push({ nodeId: child.id, absX: origin.x, absY: origin.y })
+        }
+        if (COMPONENT_LABEL_PARENT_TYPES.has(parent.type)) {
+          const origin = graph.getAbsolutePosition(child.id)
+          components.push({
+            nodeId: child.id,
+            absX: origin.x,
+            absY: origin.y,
+            parentType: parent.type
+          })
+        }
+        if (child.childIds.length > 0) {
+          stack.push({ parentId: child.id, insideSection: frame.insideSection, index: 0 })
+        }
+      } else {
+        if (hasFrameTitle(child, parent.type)) {
+          const origin = graph.getAbsolutePosition(child.id)
+          frames.push({ nodeId: child.id, absX: origin.x, absY: origin.y })
+        }
+        if (child.childIds.length > 0) {
+          stack.push({ parentId: child.id, insideSection: frame.insideSection, index: 0 })
+        }
+      }
+      if (scanned % LABEL_WALK_SLICE === 0) await yieldTurn()
+    }
+    if (token !== this.rebuildToken) return
+    this.sections = sections
+    this.components = components
+    this.frames = frames
+    this.componentSets = componentSets
+    this.remember(pageId, sceneVersion, positionPreviewVersion)
   }
 
   private rebuild(graph: SceneGraph, pageId: string | null): void {

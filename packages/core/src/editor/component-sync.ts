@@ -1,6 +1,12 @@
 import type { SceneGraph, SceneNode } from '@open-pencil/scene-graph'
 
-import { computeAllLayouts } from '#core/layout'
+import { yieldToMainThread } from '#core/editor/main-thread'
+import {
+  computeAllLayouts,
+  computeAllLayoutsCooperatively,
+  COOPERATIVE_LAYOUT_THRESHOLD,
+  subtreeExceeds
+} from '#core/layout'
 
 const isComponent = (node: SceneNode) => node.type === 'COMPONENT'
 
@@ -34,6 +40,38 @@ function componentSyncOrder(graph: SceneGraph, seeds: Set<string>): string[] {
 }
 
 type ComputeLayouts = (graph: SceneGraph, scopeId?: string) => void
+
+function pagesNeedRoomToPan(graph: SceneGraph, pageIds: Set<string>): boolean {
+  if (pageIds.size === 0) return graph.nodes.size > COOPERATIVE_LAYOUT_THRESHOLD
+  for (const pageId of pageIds) {
+    if (subtreeExceeds(graph, pageId, COOPERATIVE_LAYOUT_THRESHOLD)) return true
+  }
+  return false
+}
+
+/**
+ * Lays out the pages an instance sync touched without holding the edit's turn. Pointer events
+ * queued while a slice runs are handled before the next slice, so the canvas can pan.
+ */
+async function layoutPagesAcrossTurns(
+  graph: SceneGraph,
+  pageIds: Set<string>,
+  requestRender: () => void,
+  isCurrent: () => boolean
+): Promise<void> {
+  await yieldToMainThread()
+  if (!isCurrent()) return
+  const scopes = pageIds.size > 0 ? [...pageIds] : [undefined]
+  for (const pageId of scopes) {
+    const laidOut = await computeAllLayoutsCooperatively(
+      graph,
+      pageId,
+      () => isCurrent() && (pageId === undefined || graph.getNode(pageId) !== undefined)
+    )
+    if (!laidOut) return
+  }
+  requestRender()
+}
 
 /**
  * Only the pages that actually changed need layout work: the edited subtrees, the components
@@ -82,7 +120,9 @@ export function createComponentSyncScheduler(
       graph.syncInstancesTogether(componentSyncOrder(graph, componentIds))
       if (componentIds.size > 0) {
         const pageIds = affectedPageIds(graph, ids, componentIds)
-        if (pageIds.size === 0) computeLayouts(graph)
+        if (pagesNeedRoomToPan(graph, pageIds)) {
+          void layoutPagesAcrossTurns(graph, pageIds, requestRender, () => getGraph() === graph)
+        } else if (pageIds.size === 0) computeLayouts(graph)
         else for (const pageId of pageIds) computeLayouts(graph, pageId)
         requestRender()
       }

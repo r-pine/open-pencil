@@ -1,32 +1,61 @@
-import { computed, ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 
 import { computeAllLayouts } from '@open-pencil/core/layout'
-import { documentFontStatus, fontManager, fontResolver } from '@open-pencil/core/text'
+import {
+  documentFontStatusWhenIdle,
+  fontManager,
+  fontResolver,
+  type DocumentFontStatus
+} from '@open-pencil/core/text'
 import { useEditorEvent } from '@open-pencil/vue'
 
 import { useEditorStore } from '@/app/editor/active-store'
 import { loadFont, requestLocalFontAccess } from '@/app/editor/fonts'
 
+const EMPTY_FONT_STATUS: DocumentFontStatus = { faithful: true, faces: [], issues: [] }
+
+/** Wait until an edit burst settles before scanning the page for missing fonts. */
+const FONT_STATUS_QUIET_MS = 200
+
 export function useDocumentFontStatus() {
   const editor = useEditorStore()
-  const revision = ref(0)
   const retrying = ref(false)
+  const status = shallowRef<DocumentFontStatus>(EMPTY_FONT_STATUS)
+  let generation = 0
+  let timer: ReturnType<typeof setTimeout> | undefined
 
-  const refresh = () => {
-    revision.value++
+  /**
+   * The banner used to walk every layer of the current page inside the edit. On a file this
+   * size that walk ran before the browser could take a pan. The scan now waits out the edit
+   * and yields between slices.
+   */
+  function schedule() {
+    const scan = ++generation
+    if (timer !== undefined) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = undefined
+      void run(scan)
+    }, FONT_STATUS_QUIET_MS)
   }
 
-  useEditorEvent('font:resolution-changed', refresh)
-  useEditorEvent('graph:replaced', refresh)
-  useEditorEvent('page:changed', refresh)
-  useEditorEvent('node:created', refresh)
-  useEditorEvent('node:updated', refresh)
-  useEditorEvent('node:deleted', refresh)
+  async function run(scan: number) {
+    const pageId = editor.state.currentPageId
+    const next = await documentFontStatusWhenIdle(
+      editor.graph,
+      pageId,
+      () => scan === generation && editor.state.currentPageId === pageId
+    )
+    if (!next || scan !== generation) return
+    status.value = next
+  }
 
-  const status = computed(() => {
-    void revision.value
-    return documentFontStatus(editor.graph, editor.state.currentPageId)
-  })
+  useEditorEvent('font:resolution-changed', schedule)
+  useEditorEvent('graph:replaced', schedule)
+  useEditorEvent('page:changed', schedule)
+  useEditorEvent('node:created', schedule)
+  useEditorEvent('node:updated', schedule)
+  useEditorEvent('node:deleted', schedule)
+  schedule()
 
   async function retry() {
     if (retrying.value) return
@@ -59,7 +88,7 @@ export function useDocumentFontStatus() {
           editor.state.sceneVersion
         )
       }
-      refresh()
+      schedule()
       succeeded = true
     } catch (error) {
       if (!preparation.signal.aborted) {

@@ -5,23 +5,58 @@ import {
   type SceneMutationImpact
 } from '@open-pencil/scene-graph'
 
-import { computeAllLayouts, computeLayout } from '#core/layout'
+import { yieldToMainThread } from '#core/editor/main-thread'
+import {
+  computeAllLayouts,
+  computeAllLayoutsCooperatively,
+  COOPERATIVE_LAYOUT_THRESHOLD,
+  subtreeExceeds,
+  computeLayout
+} from '#core/layout'
+
+const layoutGeneration = new WeakMap<SceneGraph, number>()
 
 export function createLayoutRunner(getGraph: () => SceneGraph) {
+  function layoutAncestors(graph: SceneGraph, id: string) {
+    const node = graph.getNode(id)
+    if (!node) return
+    let parent = node.parentId ? graph.getNode(node.parentId) : undefined
+    while (parent) {
+      if (parent.layoutMode !== 'NONE') computeLayout(graph, parent.id)
+      parent = parent.parentId ? graph.getNode(parent.parentId) : undefined
+    }
+  }
+
+  function layoutNodeNow(graph: SceneGraph, id: string) {
+    computeAllLayouts(graph, id)
+    layoutAncestors(graph, id)
+  }
+
+  /**
+   * A large subtree is laid out after this turn. The walk used to run inside the edit, so the
+   * tab could not pan until every frame on the page had been through Yoga.
+   */
+  async function layoutNodeAcrossTurns(graph: SceneGraph, id: string, generation: number) {
+    await yieldToMainThread()
+    const current = () =>
+      getGraph() === graph && layoutGeneration.get(graph) === generation && graph.getNode(id) !== undefined
+    if (!current()) return
+    const laidOut = await computeAllLayoutsCooperatively(graph, id, current)
+    if (!laidOut || !current()) return
+    layoutAncestors(graph, id)
+  }
+
   function runLayoutForNode(id: string) {
     const graph = getGraph()
     const node = graph.getNode(id)
     if (!node) return
-
-    computeAllLayouts(graph, id)
-
-    let parent = node.parentId ? graph.getNode(node.parentId) : undefined
-    while (parent) {
-      if (parent.layoutMode !== 'NONE') {
-        computeLayout(graph, parent.id)
-      }
-      parent = parent.parentId ? graph.getNode(parent.parentId) : undefined
+    const generation = (layoutGeneration.get(graph) ?? 0) + 1
+    layoutGeneration.set(graph, generation)
+    if (subtreeExceeds(graph, id, COOPERATIVE_LAYOUT_THRESHOLD)) {
+      void layoutNodeAcrossTurns(graph, id, generation)
+      return
     }
+    layoutNodeNow(graph, id)
   }
 
   function compactLayoutScope(impact: SceneMutationImpact): string[] {

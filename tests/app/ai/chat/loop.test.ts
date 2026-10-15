@@ -6,8 +6,13 @@ import { MockLanguageModelV4 } from 'ai/test'
 
 import { FigmaAPI } from '@open-pencil/core/figma-api'
 
-import { classifyAIChatError, isCursorReplyStall } from '@/app/ai/chat/failure'
 import {
+  classifyAIChatError,
+  isCursorReplyStall,
+  repeatedActionErrorFor
+} from '@/app/ai/chat/failure'
+import {
+  ALREADY_RAN_NOTE,
   closestToolName,
   prepareLoopMessages,
   unknownToolError,
@@ -155,6 +160,101 @@ test('a repeated tool call stops the run and a different call still runs', async
     expect(model.doStreamCalls).toHaveLength(3)
     expect(reads).toEqual(['0:160', '0:163'])
     expect(userTexts(model.doStreamCalls[2]?.prompt).filter((text) => text === ASK)).toEqual([ASK])
+  } finally {
+    FigmaAPI.prototype.getNodeById = original
+    figma.mockRestore()
+    store.dispose()
+  }
+})
+
+test('the first duplicate of a successful call continues and the second stops', async () => {
+  const store = createEditorStore()
+  store.graph.createNode('RECTANGLE', store.state.currentPageId, {
+    id: '0:163',
+    name: 'Pixel-Art Flower Icon Grid',
+    width: 1536,
+    height: 1024
+  })
+  const figma = installFigma()
+  const reads: string[] = []
+  const original = FigmaAPI.prototype.getNodeById
+  FigmaAPI.prototype.getNodeById = function (id: string) {
+    reads.push(id)
+    return original.call(this, id)
+  }
+  const grid = { id: '0:163', depth: 3 }
+  const steps = [
+    { toolName: 'get_node', input: grid },
+    { toolName: 'get_node', input: grid },
+    { toolName: 'get_node', input: { id: '0:163', depth: 1 } },
+    { toolName: 'list_pages', input: {} },
+    { toolName: 'get_node', input: grid },
+    { toolName: 'set_text', input: { id: '0:162', text: 'Header' } }
+  ]
+  let call = 0
+  const model = new MockLanguageModelV4({
+    doStream: async () => {
+      const step = steps[call++]
+      return {
+        stream: simulateReadableStream({
+          initialDelayInMs: null,
+          chunkDelayInMs: null,
+          chunks: step
+            ? [
+                {
+                  type: 'tool-call' as const,
+                  toolCallId: `grid-${call}`,
+                  toolName: step.toolName,
+                  input: JSON.stringify(step.input)
+                },
+                {
+                  type: 'finish' as const,
+                  finishReason: { unified: 'tool-calls' as const, raw: undefined },
+                  usage: MOCK_USAGE
+                }
+              ]
+            : [
+                {
+                  type: 'finish' as const,
+                  finishReason: { unified: 'stop' as const, raw: undefined },
+                  usage: MOCK_USAGE
+                }
+              ]
+        })
+      }
+    }
+  })
+  try {
+    const outputs = toolOutputs(
+      await send(store, model, [{ id: 'user', role: 'user', parts: [{ type: 'text', text: ASK }] }])
+    )
+    // Resolved, then loaded. The replay and the stopping repeat do not read again.
+    expect(reads).toEqual(['0:163', '0:163', '0:163', '0:163'])
+    expect(model.doStreamCalls).toHaveLength(5)
+    const replay = outputs[1]
+    expect(replay && typeof replay === 'object' && 'name' in replay ? replay.name : undefined).toBe(
+      'Pixel-Art Flower Icon Grid'
+    )
+    expect(replay && typeof replay === 'object' && 'note' in replay ? replay.note : undefined).toBe(
+      ALREADY_RAN_NOTE
+    )
+    expect(JSON.stringify(model.doStreamCalls[2]?.prompt)).toContain(ALREADY_RAN_NOTE)
+    const listed = outputs.some(
+      (output) => typeof output === 'object' && output !== null && 'pages' in output
+    )
+    expect(listed).toBe(true)
+    const stopped = outputs.filter(
+      (output) =>
+        typeof output === 'object' &&
+        output !== null &&
+        'error' in output &&
+        output.error === repeatedActionErrorFor('en')
+    )
+    expect(stopped).toHaveLength(1)
+    expect(JSON.stringify(outputs)).not.toContain('Header')
+    expect(repeatedActionErrorFor('ru')).toBe(
+      'Модель повторила то же действие, и выполнение остановлено.'
+    )
   } finally {
     FigmaAPI.prototype.getNodeById = original
     figma.mockRestore()
@@ -523,8 +623,9 @@ test('a new generation runs list_pages again after the previous run stopped a re
   let generation = 0
   let step = 0
   const plan = [
-    ['list_pages', 'list_pages'],
-    ['list_pages', 'list_pages']
+    ['list_pages', 'list_pages', 'list_pages'],
+    ['list_pages', 'list_pages', 'list_pages'],
+    ['list_pages', 'list_pages', 'list_pages']
   ]
   const model = new MockLanguageModelV4({
     doStream: async () => {
@@ -574,8 +675,17 @@ test('a new generation runs list_pages again after the previous run stopped a re
     const first = toolOutputs(
       await send(store, model, [{ id: 'user', role: 'user', parts: [{ type: 'text', text: ASK }] }])
     )
-    expect(listed(first)).toBe(1)
+    expect(listed(first)).toBe(2)
     expect(stopped(first)).toBe(1)
+    expect(
+      first.some(
+        (output) =>
+          typeof output === 'object' &&
+          output !== null &&
+          'note' in output &&
+          output.note === ALREADY_RAN_NOTE
+      )
+    ).toBe(true)
 
     generation = 1
     step = 0
@@ -607,8 +717,36 @@ test('a new generation runs list_pages again after the previous run stopped a re
         'regenerate-message'
       )
     )
-    expect(listed(again)).toBe(1)
+    expect(listed(again)).toBe(2)
     expect(stopped(again)).toBe(1)
+
+    generation = 2
+    step = 0
+    const fresh = toolOutputs(
+      await send(store, model, [
+        { id: 'user', role: 'user', parts: [{ type: 'text', text: ASK }] },
+        {
+          id: 'assistant-2',
+          role: 'assistant',
+          parts: [
+            {
+              type: 'tool-list_pages',
+              toolCallId: 'pages-stopped',
+              state: 'output-available',
+              input: {},
+              output: { error: 'Stopped because this action was already performed in this run.' }
+            }
+          ]
+        },
+        {
+          id: 'user-new',
+          role: 'user',
+          parts: [{ type: 'text', text: 'Cut the icons into components and edit the Header' }]
+        }
+      ])
+    )
+    expect(listed(fresh)).toBe(2)
+    expect(stopped(fresh)).toBe(1)
   } finally {
     figma.mockRestore()
     store.dispose()

@@ -71,13 +71,31 @@ function stableValue(value: unknown): string {
   return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableValue(item)}`).join(',')}}`
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 /** Identity of one tool call: name plus arguments, independent of key order. */
 export function toolCallKey(name: string, args: unknown): string {
   return `${name}\n${stableValue(args)}`
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+/**
+ * Told to the model when it repeats a call that already succeeded.
+ * The next request has to be a different tool or different arguments.
+ */
+export const ALREADY_RAN_NOTE =
+  'This exact call already ran. The next call must be a different tool or different arguments.'
+
+/** A returned tool value the model can keep using. `{ error: string }` is a failed call. */
+export function toolResultSucceeded(result: unknown): boolean {
+  return !(isRecord(result) && typeof result.error === 'string')
+}
+
+/** The earlier result, plus a note that this exact call must not be made again. */
+export function resultWithAlreadyRanNote(result: unknown): unknown {
+  if (isRecord(result)) return { ...result, note: ALREADY_RAN_NOTE }
+  return { result, note: ALREADY_RAN_NOTE }
 }
 
 function editDistance(left: string, right: string): number {

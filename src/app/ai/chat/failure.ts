@@ -1,6 +1,23 @@
 import { APICallError, StreamProviderError } from 'ai'
 
+import { locale } from '@open-pencil/vue'
+
 import { CursorEventStreamStallError } from '@/app/ai/providers/cursor/event-stream'
+
+/** Shown on the tool card when a second identical call stops the run. */
+const REPEATED_ACTION_ERROR = 'Stopped because this action was already performed in this run.'
+
+/** Russian copy of the stop, the same sentence as `chatRepeatedAction`. */
+const REPEATED_ACTION_ERROR_RU = 'Модель повторила то же действие, и выполнение остановлено.'
+
+export function repeatedActionErrorFor(language: string): string {
+  return language === 'ru' ? REPEATED_ACTION_ERROR_RU : REPEATED_ACTION_ERROR
+}
+
+/** The stop text for the active locale. Russian must not stay on the English sentence. */
+export function repeatedActionError(): string {
+  return repeatedActionErrorFor(locale.get())
+}
 
 export type AIChatFailureReason =
   | 'authentication'

@@ -1,6 +1,7 @@
 import type { SceneGraph, SceneNode } from '@open-pencil/scene-graph'
 
 import { DEFAULT_FONT_FAMILY } from '#core/constants'
+import { MAIN_THREAD_SLICE_MS, nowMs, yieldToMainThread } from '#core/editor/main-thread'
 import type { FontLoadedSource, FontUnavailableReason } from '#core/text/font/sources'
 import { fontManager, type FontManager } from '#core/text/fonts'
 import { collectNodeFontFaces } from '#core/text/requirements'
@@ -44,20 +45,7 @@ function rootTextNodes(graph: SceneGraph, rootIds: readonly string[]): SceneNode
 
 function collectFaceUses(graph: SceneGraph, rootIds: readonly string[]): MutableFontFaceUse[] {
   const uses = new Map<string, MutableFontFaceUse>()
-  for (const node of rootTextNodes(graph, rootIds)) {
-    for (const { family, style } of collectNodeFontFaces(node)) {
-      const key = faceKey(family, style)
-      const use = uses.get(key) ?? {
-        family,
-        style,
-        nodeIds: new Set<string>(),
-        nodeNames: new Set<string>()
-      }
-      use.nodeIds.add(node.id)
-      use.nodeNames.add(node.name)
-      uses.set(key, use)
-    }
-  }
+  for (const node of rootTextNodes(graph, rootIds)) rememberFace(uses, node)
   return [...uses.values()]
 }
 
@@ -108,9 +96,64 @@ export function documentFontStatus(
   manager: FontManager = fontManager
 ): DocumentFontStatus {
   const roots = typeof rootIds === 'string' ? [rootIds] : rootIds
-  const faces = collectFaceUses(graph, roots)
+  return statusFromUses(collectFaceUses(graph, roots), manager)
+}
+
+function statusFromUses(uses: MutableFontFaceUse[], manager: FontManager): DocumentFontStatus {
+  const faces = uses
     .map((use) => faceStatus(use, manager))
     .sort((a, b) => a.family.localeCompare(b.family) || a.style.localeCompare(b.style))
   const issues = faces.filter((face) => face.status !== 'available')
   return { faithful: issues.length === 0, faces, issues }
+}
+
+function rememberFace(uses: Map<string, MutableFontFaceUse>, node: SceneNode) {
+  for (const { family, style } of collectNodeFontFaces(node)) {
+    const key = faceKey(family, style)
+    const use = uses.get(key) ?? {
+      family,
+      style,
+      nodeIds: new Set<string>(),
+      nodeNames: new Set<string>()
+    }
+    use.nodeIds.add(node.id)
+    use.nodeNames.add(node.name)
+    uses.set(key, use)
+  }
+}
+
+/**
+ * Same report as `documentFontStatus`, walked a slice at a time. A page of this file is the
+ * whole design, and scanning it inside the edit kept the canvas from panning. Returns null
+ * when `shouldContinue` fails, so a newer edit can abandon the walk.
+ */
+export async function documentFontStatusWhenIdle(
+  graph: SceneGraph,
+  rootId: string,
+  shouldContinue: () => boolean = () => true,
+  manager: FontManager = fontManager
+): Promise<DocumentFontStatus | null> {
+  const uses = new Map<string, MutableFontFaceUse>()
+  const stack = [...(graph.getNode(rootId)?.childIds ?? [])].reverse()
+  let scanned = 0
+  let sliceStart = nowMs()
+  while (stack.length > 0) {
+    if (!shouldContinue()) return null
+    const id = stack.pop()
+    if (!id) continue
+    const node = graph.getNode(id)
+    if (!node) continue
+    scanned++
+    if (node.type === 'TEXT') rememberFace(uses, node)
+    for (let index = node.childIds.length - 1; index >= 0; index--) {
+      const childId = node.childIds[index]
+      if (childId) stack.push(childId)
+    }
+    if (scanned % 400 === 0 || nowMs() - sliceStart >= MAIN_THREAD_SLICE_MS) {
+      await yieldToMainThread()
+      sliceStart = nowMs()
+      if (!shouldContinue()) return null
+    }
+  }
+  return statusFromUses([...uses.values()], manager)
 }

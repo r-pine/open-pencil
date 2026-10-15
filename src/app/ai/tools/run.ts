@@ -3,7 +3,7 @@ import type { StepBudget } from '@open-pencil/core/tools'
 import type { UndoEntry } from '@open-pencil/scene-graph/undo'
 
 import { describeUndoneCalls, type CallRef } from '@/app/ai/chat/context'
-import { toolCallKey } from '@/app/ai/chat/loop'
+import { toolCallKey, toolResultSucceeded } from '@/app/ai/chat/loop'
 import { DEFAULT_AGENT_STEPS, resolveAgentStepLimit } from '@/app/ai/chat/step-limit'
 import type { PreviewFocus } from '@/app/ai/preview/canvas'
 import { getActiveEditorStore } from '@/app/editor/active-store'
@@ -25,6 +25,27 @@ export function aiUndoLabel(tool: string): string {
   return `AI: ${tool}`
 }
 
+/** One name and arguments already requested in this run, with the result once it exists. */
+interface SeenToolCall {
+  previous: Promise<unknown>
+  resolve: (result: unknown) => void
+  success: boolean
+  /** How many times the model has asked for this call again. */
+  repeats: number
+  done: boolean
+}
+
+/** The first request may run. A later identical request replays or stops. */
+type ToolClaim =
+  | { kind: 'first'; finish: (result: unknown) => void }
+  | {
+      kind: 'repeat'
+      /** 1 is the first identical repeat; 2 is the one that stops the run. */
+      repeat: number
+      previous: Promise<unknown>
+      succeeded: () => boolean
+    }
+
 export class Run {
   currentSteps = 0
   /** Captured for the message in progress; settings changes apply to the next one. */
@@ -41,11 +62,11 @@ export class Run {
   readonly changedCalls = new Set<string>()
   /** False once the reply finished, was stopped, or failed; its agent no longer moves. */
   active = true
-  /** The model asked for a tool call this run already made, so the loop stops. */
+  /** The model repeated one call twice, or repeated a call that failed, so the loop stops. */
   repeatedAction = false
   /** Cursor stopped sending a reply. The step is not retried. */
   stalled = false
-  private readonly executedToolCalls = new Set<string>()
+  private readonly seenToolCalls = new Map<string, SeenToolCall>()
   private toolsInFlight = 0
   private whenSettled: Promise<void> = Promise.resolve()
   private settle: () => void = () => undefined
@@ -61,17 +82,43 @@ export class Run {
 
   /**
    * Records a tool call the model just requested. The first time, it may run.
-   * The same name and arguments again — including a call that already failed
-   * because `id` was missing — must not run, and the loop must not continue.
+   * The first repeat of a call that already succeeded does not run again: the
+   * caller answers with the stored result. A repeat of a call that failed, and
+   * a second repeat of the same name and arguments, stop the run.
    */
-  acceptToolCall(name: string, args: unknown): boolean {
+  claimToolCall(name: string, args: unknown): ToolClaim {
     const key = toolCallKey(name, args)
-    if (this.executedToolCalls.has(key)) {
-      this.repeatedAction = true
-      return false
+    const existing = this.seenToolCalls.get(key)
+    if (existing) {
+      const repeat = ++existing.repeats
+      return {
+        kind: 'repeat',
+        repeat,
+        previous: existing.previous,
+        succeeded: () => existing.success
+      }
     }
-    this.executedToolCalls.add(key)
-    return true
+    let resolveResult: (result: unknown) => void = () => undefined
+    const previous = new Promise<unknown>((done) => {
+      resolveResult = done
+    })
+    const entry: SeenToolCall = {
+      previous,
+      resolve: resolveResult,
+      success: false,
+      repeats: 0,
+      done: false
+    }
+    this.seenToolCalls.set(key, entry)
+    return {
+      kind: 'first',
+      finish: (result: unknown) => {
+        if (entry.done) return
+        entry.done = true
+        entry.success = toolResultSucceeded(result)
+        entry.resolve(result)
+      }
+    }
   }
 
   /** A tool started editing for this run; `settled` waits until every such tool is done. */
