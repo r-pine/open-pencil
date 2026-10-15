@@ -157,8 +157,13 @@ export function createAITools(store: EditorStore, diagnosticContext?: AIDiagnost
         }
         return figma
       },
-      executeTool: async (def, figma, args, options) =>
-        withUndoNote(await executeCall(def, figma, args, options), takeRunUndoNote(store)),
+      executeTool: async (def, figma, args, options) => {
+        const run = currentRun(store)
+        if (!run.acceptToolCall(def.name, args)) {
+          return { error: 'Stopped because this action was already performed in this run.' }
+        }
+        return withUndoNote(await executeCall(def, figma, args, options), takeRunUndoNote(store))
+      },
       onAfterExecute: (def) => {
         if (def.mutates && !isAtomicTool(def)) store.requestRender()
       },

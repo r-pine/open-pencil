@@ -9,7 +9,7 @@ export function openPencilPwaPlugin() {
       globPatterns: ['**/*.{js,css,html,wasm,png,svg,ico,ttf,webmanifest}'],
       navigateFallback: '/index.html',
       // OAuth callbacks are standalone pages that relay a redirect, not app routes.
-      navigateFallbackDenylist: [/^\/oauth\//]
+      navigateFallbackDenylist: [/^\/oauth\//, /^\/mqtt/]
     },
     manifest: {
       name: 'OpenPencil',

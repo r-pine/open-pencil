@@ -11,6 +11,7 @@ import { computeDescendantVisualBounds, type VisualBounds } from '@open-pencil/s
 
 import type { SkiaRenderer } from '#core/canvas'
 import { getPageColor } from '#core/figma-api/page-backgrounds'
+import { isFigSaveMemoryError } from '#core/io/formats/fig/thumbnail-budget'
 import { extractExportGraph, findPageId } from '#core/io/subgraph'
 
 export type RasterExportFormat = 'PNG' | 'JPG' | 'WEBP'
@@ -332,27 +333,37 @@ export function renderThumbnail(
   width: number,
   height: number
 ): Uint8Array | null {
-  const page = graph.getNode(pageId)
-  if (!page || page.childIds.length === 0) return null
+  try {
+    const page = graph.getNode(pageId)
+    if (!page || page.childIds.length === 0) return null
 
-  const bounds = computeContentBounds(graph, page.childIds)
-  if (!bounds) return null
+    const bounds = computeContentBounds(graph, page.childIds)
+    if (!bounds) return null
 
-  const contentW = bounds.maxX - bounds.minX
-  const contentH = bounds.maxY - bounds.minY
-  if (contentW <= 0 || contentH <= 0) return null
+    const contentW = bounds.maxX - bounds.minX
+    const contentH = bounds.maxY - bounds.minY
+    if (contentW <= 0 || contentH <= 0) return null
 
-  const scale = Math.min(width / contentW, height / contentH)
-  const pixelW = Math.max(1, Math.round(contentW * scale))
-  const pixelH = Math.max(1, Math.round(contentH * scale))
-  // The page's own background, which the editor's page colour matches only while it is open.
-  const background = getPageColor(page)
+    const scale = Math.min(width / contentW, height / contentH)
+    if (!Number.isFinite(scale) || scale <= 0) return null
+    // Fit the page into the requested box. Rounding must not grow a full-document bitmap.
+    const pixelW = Math.min(width, Math.max(1, Math.round(contentW * scale)))
+    const pixelH = Math.min(height, Math.max(1, Math.round(contentH * scale)))
+    if (!Number.isFinite(pixelW) || !Number.isFinite(pixelH)) return null
+    // The page's own background, which the editor's page colour matches only while it is open.
+    const background = getPageColor(page)
 
-  return renderToSurface(ck, renderer, graph, pageId, pixelW, pixelH, 'PNG', 100, (canvas) => {
-    canvas.clear(ck.Color4f(background.r, background.g, background.b, 1))
-    canvas.translate(-bounds.minX * scale, -bounds.minY * scale)
-    canvas.scale(scale, scale)
-  })
+    return renderToSurface(ck, renderer, graph, pageId, pixelW, pixelH, 'PNG', 100, (canvas) => {
+      canvas.clear(ck.Color4f(background.r, background.g, background.b, 1))
+      canvas.translate(-bounds.minX * scale, -bounds.minY * scale)
+      canvas.scale(scale, scale)
+    })
+  } catch (error) {
+    // Out of memory has to reach the save, which keeps the archive thumbnail and still patches.
+    if (isFigSaveMemoryError(error)) throw error
+    console.warn('Thumbnail raster skipped:', error)
+    return null
+  }
 }
 
 /** Draws a page region with `renderer`; `region.ts` gives it a renderer of its own. */

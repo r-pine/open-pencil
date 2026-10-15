@@ -77,6 +77,86 @@ export function deserializeInstanceOverrideState(state: unknown): InstanceOverri
   return { self, descendants }
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Map)
+  )
+}
+
+/** A field map stored as a Map, as serialized entries, or as a plain object. */
+function coerceFieldMap(value: unknown): Map<InstanceOverrideField, unknown> {
+  if (value instanceof Map) {
+    const fields = new Map<InstanceOverrideField, unknown>()
+    for (const [field, entry] of value) {
+      if (typeof field === 'string') fields.set(field, entry)
+    }
+    return fields
+  }
+  if (Array.isArray(value)) return deserializeEntries(value)
+  if (isPlainRecord(value)) return new Map(Object.entries(value))
+  return new Map()
+}
+
+function coerceDescendants(value: unknown): Map<string, Map<InstanceOverrideField, unknown>> {
+  const descendants = new Map<string, Map<InstanceOverrideField, unknown>>()
+  if (value instanceof Map) {
+    for (const [id, fields] of value) {
+      if (typeof id !== 'string') continue
+      descendants.set(id, coerceFieldMap(fields))
+    }
+    return descendants
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string') continue
+      descendants.set(entry[0], coerceFieldMap(entry[1]))
+    }
+    return descendants
+  }
+  if (isPlainRecord(value)) {
+    for (const [id, fields] of Object.entries(value)) descendants.set(id, coerceFieldMap(fields))
+  }
+  return descendants
+}
+
+function isReadyInstanceOverrideState(state: unknown): state is InstanceOverrideState {
+  if (
+    !isPlainRecord(state) ||
+    !(state.self instanceof Map) ||
+    !(state.descendants instanceof Map)
+  ) {
+    return false
+  }
+  for (const fields of state.descendants.values()) {
+    if (!(fields instanceof Map)) return false
+  }
+  return true
+}
+
+/**
+ * Runtime override maps, the JSON entry form, or plain objects left behind when a Map was
+ * copied through a channel that only keeps enumerable fields. Already-valid state is returned
+ * unchanged.
+ */
+export function ensureInstanceOverrideState(state: unknown): InstanceOverrideState {
+  if (isReadyInstanceOverrideState(state)) return state
+  if (!isPlainRecord(state)) return createInstanceOverrideState()
+  const self = 'self' in state ? state.self : undefined
+  const descendants = 'descendants' in state ? state.descendants : undefined
+  if (Array.isArray(self) || Array.isArray(descendants))
+    return deserializeInstanceOverrideState(state)
+  return { self: coerceFieldMap(self), descendants: coerceDescendants(descendants) }
+}
+
+/** Replace a node's override state when it is not already maps. */
+export function normalizeNodeInstanceOverrides(node: {
+  instanceOverrides: InstanceOverrideState
+}): InstanceOverrideState {
+  const ready = ensureInstanceOverrideState(node.instanceOverrides)
+  if (ready !== node.instanceOverrides) node.instanceOverrides = ready
+  return ready
+}
+
 export function cloneInstanceOverrideState(state: InstanceOverrideState): InstanceOverrideState {
   return {
     self: new Map([...state.self].map(([field, value]) => [field, structuredClone(value)])),

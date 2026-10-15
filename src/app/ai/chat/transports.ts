@@ -16,6 +16,12 @@ import type { ACPAgentID, AIProviderID } from '@open-pencil/core/constants'
 
 import { AgentSetupError, assertAgentReady } from '@/app/ai/agents/readiness'
 import { classifyAIChatError, type AIChatFailure } from '@/app/ai/chat/failure'
+import {
+  guardToolLoopModel,
+  prepareLoopMessages,
+  unknownToolError,
+  unknownToolNameFrom
+} from '@/app/ai/chat/loop'
 import { resolveLanguageModelID } from '@/app/ai/chat/model'
 import { reasoningCallSettings, type AIProviderOptions } from '@/app/ai/chat/reasoning'
 import SYSTEM_PROMPT from '@/app/ai/chat/system-prompt'
@@ -91,6 +97,10 @@ function mergeProviderOptions(
   return { ...cacheOptions, ...reasoningOptions }
 }
 
+function offeredToolNames(): string[] {
+  return enabledAIToolDefinitions(aiToolOverrides.value).map((tool) => tool.name)
+}
+
 function callSettings(
   providerID: AIProviderID,
   cacheOptions: typeof ANTHROPIC_CACHE_CONTROL | undefined,
@@ -138,7 +148,13 @@ export function createToolLoopTransport({
     : undefined
   let recording: RunRecording | undefined
   const agent = new ToolLoopAgent({
-    model,
+    model: guardToolLoopModel(
+      model,
+      () => {
+        currentRun(store).stalled = true
+      },
+      offeredToolNames
+    ),
     instructions: SYSTEM_PROMPT,
     tools,
     maxOutputTokens,
@@ -154,9 +170,20 @@ export function createToolLoopTransport({
         Object.entries(tools).filter(([name]) => enabledNames.has(name))
       )
       recording?.offer(offered)
+      const run = currentRun(store)
       return {
         ...options,
-        stopWhen: stepCountIs(currentRun(store).maxSteps),
+        stopWhen: [
+          stepCountIs(run.maxSteps),
+          () => {
+            const active = currentRun(store)
+            return active.repeatedAction || active.stalled
+          }
+        ],
+        // A retry must not leave the same user turn in the middle of tool history.
+        prepareStep: ({ messages }) => ({
+          messages: prepareLoopMessages(messages, offeredToolNames())
+        }),
         tools: offered,
         maxOutputTokens,
         ...callSettings(providerID, cacheProviderOptions, thinkingLevel())
@@ -187,6 +214,8 @@ export function createToolLoopTransport({
   })
 
   function handleError(error: unknown): string {
+    const toolName = unknownToolNameFrom(error)
+    if (toolName) return unknownToolError(toolName, offeredToolNames())
     preview.clear()
     endRun(store, run)
     recording?.fail(error)
@@ -229,10 +258,11 @@ export function createToolLoopTransport({
       const { abortSignal } = options
       if (abortSignal?.aborted) stop()
       else if (abortSignal) useEventListener(abortSignal, 'abort', stop)
+      const messages = prepareLoopMessages(options.messages, offeredToolNames())
       // DirectChatTransport handles error chunks, but not a rejected underlying stream.
       return createUIMessageStream<UIMessage>({
         execute: async ({ writer }) => {
-          writer.merge(await transport.sendMessages(options))
+          writer.merge(await transport.sendMessages({ ...options, messages }))
         },
         onError: handleError
       })
@@ -443,6 +473,11 @@ export function createChatSessionManager({
           recordChatFailed({ errorName, errorCode, message, stack }, diagnosticContext)
         },
         onFinish: (event) => {
+          const active = currentRun(store)
+          if (!event.isError && !event.isAbort && failure.value == null) {
+            if (active.repeatedAction) failure.value = { reason: 'repeated-action' }
+            else if (active.stalled) failure.value = { reason: 'stalled' }
+          }
           handleChatFinish(diagnosticContext, event)
           // The reply is over, however it ended; its agent rests instead of waiting it out.
           if (agentKind) restAgents(agentKind)

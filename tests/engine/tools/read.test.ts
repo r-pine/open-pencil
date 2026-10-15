@@ -203,6 +203,60 @@ describe('get_node', () => {
     expect(result.width).toBe(100)
     expect(result.height).toBe(50)
   })
+
+  test('resolves a unique layer name or referenced label to that node id', () => {
+    const { figma } = setupToolTest()
+    const card = figma.createFrame()
+    const header = figma.createFrame()
+    header.name = 'Header\n'
+    const title = figma.createText()
+    title.characters = 'Hello'
+    header.appendChild(title)
+    card.appendChild(header)
+
+    const tool = getTool('get_node')
+    const byName = tool.execute(figma, { id: 'Header', depth: 0 }) as ToolResult
+    expect(byName.error).toBeUndefined()
+    expect(byName.id).toBe(header.id)
+    expect(byName.name).toBe('Header\n')
+    expect(byName.childCount).toBe(1)
+    expect(byName).not.toHaveProperty('children')
+
+    const byId = tool.execute(figma, { id: header.id, depth: 3 }) as ToolResult
+    expect(byId.id).toBe(header.id)
+    expect(byId.name).toBe('Header\n')
+    expect(byId.children).toEqual([expect.objectContaining({ id: title.id })])
+  })
+
+  test('does not pick a node when the name is ambiguous or not on this page', () => {
+    const { figma } = setupToolTest()
+    const page = figma.currentPage
+    const first = figma.createFrame()
+    first.name = 'Header'
+    const second = figma.createText()
+    second.name = 'Header'
+    const namedLikeAnId = figma.createRectangle()
+    namedLikeAnId.name = '0:160'
+
+    const tool = getTool('get_node')
+    const ambiguous = tool.execute(figma, { id: 'Header', depth: 3 }) as ToolResult
+    expect(ambiguous.error).toBe('Node name "Header" matches more than one node. Pass an id.')
+    expect(ambiguous.id).toBeUndefined()
+
+    const missingId = tool.execute(figma, { id: '0:160', depth: 3 }) as ToolResult
+    expect(missingId.error).toBe('Node "0:160" not found')
+    expect(missingId.id).toBeUndefined()
+
+    const other = figma.createPage()
+    figma.currentPage = other
+    const elsewhere = figma.createFrame()
+    elsewhere.name = 'Only There'
+    figma.currentPage = page
+
+    const otherPage = tool.execute(figma, { id: 'Only There' }) as ToolResult
+    expect(otherPage.error).toBe('Node "Only There" not found')
+    expect(tool.execute(figma, { id: first.id })).toMatchObject({ id: first.id, name: 'Header' })
+  })
 })
 
 describe('get_page_tree', () => {

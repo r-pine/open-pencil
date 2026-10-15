@@ -73,16 +73,33 @@ export function createShaderFrames(
     }, SETTLE_MS)
   }
 
-  /** The shaders on `pageId` whose frames are missing or out of date. */
+  /**
+   * The shaders on `pageId` whose frames are missing or out of date. Walks that page only:
+   * scanning every layer in the file, then asking whether each one is on the page, is a full
+   * pass over a 100k-layer document on every page switch.
+   */
   function staleOnPage(pageId: string): { id: string; shader: ShaderPaint }[] {
     const graph = ctx.graph
-    return [...graph.getAllNodes()].flatMap((node) => {
-      if (readShaderPaints(node).length === 0 || !graph.isDescendant(node.id, pageId)) return []
+    const stale: { id: string; shader: ShaderPaint }[] = []
+    const stack = [...(graph.getNode(pageId)?.childIds ?? [])]
+    while (stack.length > 0) {
+      const id = stack.pop()
+      if (!id) continue
+      const node = graph.getNode(id)
+      if (!node) continue
+      for (let index = node.childIds.length - 1; index >= 0; index--) {
+        const childId = node.childIds[index]
+        if (childId) stack.push(childId)
+      }
+      if (node.pluginData.length === 0) continue
+      const paints = readShaderPaints(node)
+      if (paints.length === 0) continue
       const size = { width: node.width, height: node.height }
-      return shownShaders(node)
-        .filter((shader) => !isCurrent(shader, size))
-        .map((shader) => ({ id: node.id, shader }))
-    })
+      for (const shader of shownShaders(node)) {
+        if (!isCurrent(shader, size)) stale.push({ id: node.id, shader })
+      }
+    }
+    return stale
   }
 
   async function drawFrame(id: string, shader: ShaderPaint, active: ShaderRasterizer) {

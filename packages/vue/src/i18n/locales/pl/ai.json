@@ -142,6 +142,8 @@
   "chatInsufficientCredit": "Konto dostawcy nie ma wystarczających środków lub limitu. Doładuj je i spróbuj ponownie.",
   "chatOutputLimit": "Model wyczerpał limit tokenów wyjściowych podczas rozumowania. Zwiększ maksymalną liczbę tokenów wyjściowych lub zmniejsz poziom rozumowania.",
   "chatRequestFailed": "Żądanie do modelu nie powiodło się. Sprawdź ustawienia dostawcy i spróbuj ponownie.",
+  "chatRepeatedAction": "Model powtórzył tę samą czynność i działanie zostało zatrzymane.",
+  "chatStreamStalled": "Model nie przysłał odpowiedzi. Połączenie pozostało otwarte, ale nie dotarły żadne nowe dane. Spróbuj ponownie.",
   "visionModelUnavailable": "Przed dołączeniem obrazów wybierz model Vision w Ustawieniach.",
   "chatPiCompanionMissing": "Pi potrzebuje programu towarzyszącego Harness. Uruchom konfigurację z przewodnikiem, aby go zainstalować.",
   "chatPiCompanionOutdated": "Program towarzyszący Harness nie pasuje do tej wersji OpenPencil. Uruchom konfigurację z przewodnikiem, aby go zaktualizować.",

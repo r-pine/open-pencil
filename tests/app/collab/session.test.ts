@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 
-import { SceneGraph } from '@open-pencil/scene-graph'
+import { SceneGraph, type Fill } from '@open-pencil/scene-graph'
 
-import { openRoomSession, type RoomSession, type RoomSessionOptions } from '@/app/collab/session'
+import {
+  LARGE_FIG_ARCHIVE_BYTES,
+  openRoomSession,
+  shouldOpenRoomDatabase,
+  type RoomSession,
+  type RoomSessionOptions
+} from '@/app/collab/session'
+import { SYNC_ALL_NODES_SYNC_LIMIT } from '@/app/collab/yjs-sync'
 import { createEditorStore, type EditorStore } from '@/app/editor/session'
 import { presenceOf } from '@/app/presence/registry'
 
@@ -40,10 +47,21 @@ async function withRooms(
   }
 }
 
-function newStore(name = 'Untitled') {
-  const store = createEditorStore(new SceneGraph())
+function newStore(name = 'Untitled', graph = new SceneGraph()) {
+  const store = createEditorStore(graph)
   store.state.documentName = name
   return store
+}
+
+/** The same layer ids a second tab gets by opening the same file. */
+function largeDocument(): SceneGraph {
+  let next = 0
+  const graph = new SceneGraph(() => `doc-${next++}`)
+  const pageId = expectDefined(graph.getPages()[0], 'first page').id
+  for (let index = 0; index < SYNC_ALL_NODES_SYNC_LIMIT; index++) {
+    graph.createNode('RECTANGLE', pageId, { id: `layer-${index}`, x: 0 })
+  }
+  return graph
 }
 
 function firstPageId(store: EditorStore) {
@@ -160,6 +178,127 @@ describe('room sessions', () => {
       expect(guest.graph.getNode('after-leave')).toBeUndefined()
       expect(joined.peers.value).toEqual([])
       expect(presenceOf(guest).peers.value).toEqual([])
+    })
+  })
+
+  test('a large shared file claims the room and syncs a later edit, not its layers', async () => {
+    await withRooms(async (open, settle) => {
+      const host = newStore('aska', largeDocument())
+      const peer = newStore('aska', largeDocument())
+      const pageId = firstPageId(host)
+      const order = [...getNodeOrThrow(peer.graph, pageId).childIds]
+      open({ roomId: ROOM_A, store: host, origin: 'shared' }).shareDocument()
+      open({ roomId: ROOM_A, store: peer, origin: 'shared' }).shareDocument()
+      await settle()
+
+      expect(peer.graph.getNode('layer-0')).toBeDefined()
+      expect(peer.graph.nodes.size).toBe(host.graph.nodes.size)
+      host.graph.updateNode('layer-3', { x: 42 })
+      await settle()
+
+      expect(getNodeOrThrow(peer.graph, 'layer-3').x).toBe(42)
+      expect(getNodeOrThrow(peer.graph, 'layer-3').parentId).toBe(pageId)
+      expect(getNodeOrThrow(peer.graph, 'layer-0').parentId).toBe(pageId)
+      expect(getNodeOrThrow(peer.graph, pageId).childIds).toEqual(order)
+      expect(peer.graph.nodes.size).toBe(host.graph.nodes.size)
+    })
+  })
+
+  test('room database follows archive bytes, not the layer count after first-page populate', () => {
+    expect(shouldOpenRoomDatabase(97, LARGE_FIG_ARCHIVE_BYTES + 1)).toBe(false)
+    expect(shouldOpenRoomDatabase(97, 48_000)).toBe(true)
+    expect(shouldOpenRoomDatabase(SYNC_ALL_NODES_SYNC_LIMIT, undefined)).toBe(true)
+    expect(shouldOpenRoomDatabase(SYNC_ALL_NODES_SYNC_LIMIT + 1, 48_000)).toBe(false)
+  })
+
+  test('a 97-node cover of a large fig does not open room IndexedDB', async () => {
+    await withRooms(async (open, settle) => {
+      const host = newStore('aska')
+      const pageId = firstPageId(host)
+      const blob = new Uint8Array(64)
+      blob[0] = 9
+      host.graph.createNode('VECTOR', pageId, {
+        id: 'cover-shape',
+        fillGeometry: [{ windingRule: 'NONZERO', commandsBlob: blob }]
+      })
+      host.graph.images.set('cover', new Uint8Array([1, 2, 3, 4]))
+      const imageFill: Fill = {
+        type: 'IMAGE',
+        color: { r: 0, g: 0, b: 0, a: 1 },
+        opacity: 1,
+        visible: true,
+        imageHash: 'cover',
+        imageScaleMode: 'FILL'
+      }
+      host.graph.createNode('RECTANGLE', pageId, { id: 'cover-image', fills: [imageFill] })
+      while (host.graph.nodes.size < 97) {
+        host.graph.createNode('RECTANGLE', pageId, { id: `cover-${host.graph.nodes.size}` })
+      }
+      expect(host.graph.nodes.size).toBe(97)
+
+      let databaseOpens = 0
+      const shared = open({
+        roomId: ROOM_A,
+        store: host,
+        origin: 'shared',
+        archiveBytes: LARGE_FIG_ARCHIVE_BYTES + 1,
+        openSavedCopy: () => {
+          databaseOpens += 1
+          // Opening the real database would Y.applyUpdate the saved full dump here.
+          host.graph.createNode('RECTANGLE', pageId, { id: 'from-dump' })
+          return noSavedCopy()
+        }
+      })
+      shared.shareDocument()
+      expect(databaseOpens).toBe(0)
+      expect(host.graph.getNode('from-dump')).toBeUndefined()
+      expect(host.graph.nodes.size).toBe(97)
+
+      const guest = newStore()
+      open({ roomId: ROOM_A, store: guest, origin: 'joined' })
+      await settle()
+
+      expect(getNodeOrThrow(guest.graph, 'cover-shape').fillGeometry).toEqual([])
+      expect(host.graph.getNode('cover-shape')?.fillGeometry[0]?.commandsBlob[0]).toBe(9)
+      expect(getNodeOrThrow(guest.graph, 'cover-image').fills[0]?.imageHash).toBe('cover')
+      expect(guest.graph.images.has('cover')).toBe(false)
+
+      host.graph.updateNode('cover-shape', { x: 42 })
+      await settle()
+      expect(getNodeOrThrow(guest.graph, 'cover-shape').x).toBe(42)
+      expect(guest.graph.images.has('cover')).toBe(false)
+    })
+  })
+
+  test('a small archive still opens room IndexedDB and syncs its whole graph', async () => {
+    await withRooms(async (open, settle) => {
+      const host = newStore('Notes')
+      const pageId = firstPageId(host)
+      host.graph.createNode('RECTANGLE', pageId, { id: 'card', x: 1 })
+      expect(host.graph.nodes.size).toBeLessThan(SYNC_ALL_NODES_SYNC_LIMIT)
+
+      let databaseOpens = 0
+      const shared = open({
+        roomId: ROOM_A,
+        store: host,
+        origin: 'shared',
+        archiveBytes: 48_000,
+        openSavedCopy: () => {
+          databaseOpens += 1
+          return noSavedCopy()
+        }
+      })
+      shared.shareDocument()
+      expect(databaseOpens).toBe(1)
+
+      const guest = newStore()
+      open({ roomId: ROOM_A, store: guest, origin: 'joined' })
+      await settle()
+      expect(getNodeOrThrow(guest.graph, 'card').x).toBe(1)
+
+      host.graph.updateNode('card', { x: 7 })
+      await settle()
+      expect(getNodeOrThrow(guest.graph, 'card').x).toBe(7)
     })
   })
 })

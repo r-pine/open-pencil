@@ -54,11 +54,9 @@ import { IS_BROWSER } from '@/constants'
 const route = useRoute()
 const router = useRouter()
 const createdInitialTab = tabCount() === 0
-const shouldCreateHome =
-  route.path === '/' &&
-  !appRuntimeConfig.test &&
-  !route.meta.demo &&
-  (isTauri() || appRuntimeConfig.recentFiles)
+// `/` is the files home (recent files + storage), with no editor tab. A blank
+// document is only the explicit New design action, `?test`, or `/demo`.
+const shouldCreateHome = route.path === '/' && !appRuntimeConfig.test && !route.meta.demo
 const { collaboration } = useI18n()
 const joinRoomFromInput = useJoinRoom()
 

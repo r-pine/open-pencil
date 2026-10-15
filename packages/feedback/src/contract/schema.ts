@@ -30,6 +30,7 @@ export const AI_PROVIDERS = [
   'openai-compatible',
   'zai',
   'minimax',
+  'cursor',
   'anthropic-compatible',
   'harness:pi',
   'acp:claude-code',

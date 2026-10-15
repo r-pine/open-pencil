@@ -2,6 +2,8 @@ import { isEqual } from 'es-toolkit/predicate'
 
 import type { SceneGraph, SceneNode } from '@open-pencil/scene-graph'
 
+import { yieldToMainThread } from '#core/editor/main-thread'
+
 export interface FigPopulationDelta {
   created: Array<[string, SceneNode]>
   updated: Array<[string, Partial<SceneNode>]>
@@ -121,19 +123,89 @@ export function buildFigPopulationDelta(
   }
 }
 
+/** Creates applied in one turn. More than this, and the tab cannot take a click until the page lands. */
+const POPULATION_SLICE_NODES = 40
+
 export function applyFigPopulationDelta(graph: SceneGraph, delta: FigPopulationDelta): void {
   graph.applyImportedStateDuring(() => {
-    for (const [, node] of delta.created) {
-      graph.createNodeWithId(node.id, node.type, node.parentId, node)
-    }
-    for (const [id, changes] of delta.updated) graph.updateNode(id, changes)
-    for (const id of delta.deleted) graph.deleteNode(id)
+    applyPopulationSlice(graph, delta, 0, delta.created.length, 0, delta.updated.length, 0, delta.deleted.length)
   })
-  graph.instanceIndex.clear()
-  for (const node of graph.getAllNodes()) {
-    if (node.type !== 'INSTANCE' || !node.componentId) continue
-    const ids = graph.instanceIndex.get(node.componentId) ?? new Set<string>()
-    ids.add(node.id)
-    graph.instanceIndex.set(node.componentId, ids)
+}
+
+/**
+ * Applies a page in short turns. `createNode` already indexes instances, so this does not walk
+ * the rest of the file to rebuild `instanceIndex` — that walk is the whole document after the
+ * second page of a 100k-layer file has loaded.
+ */
+export async function applyFigPopulationDeltaCooperatively(
+  graph: SceneGraph,
+  delta: FigPopulationDelta
+): Promise<void> {
+  await applyPhase(graph, delta.created.length, (from, to) => {
+    applyPopulationSlice(graph, delta, from, to, 0, 0, 0, 0)
+  })
+  await applyPhase(graph, delta.updated.length, (from, to) => {
+    applyPopulationSlice(graph, delta, 0, 0, from, to, 0, 0)
+  })
+  await applyPhase(graph, delta.deleted.length, (from, to) => {
+    applyPopulationSlice(graph, delta, 0, 0, 0, 0, from, to)
+  })
+}
+
+async function applyPhase(
+  graph: SceneGraph,
+  total: number,
+  apply: (from: number, to: number) => void
+): Promise<void> {
+  for (let from = 0; from < total; from += POPULATION_SLICE_NODES) {
+    const to = Math.min(total, from + POPULATION_SLICE_NODES)
+    graph.applyImportedStateDuring(() => apply(from, to))
+    if (to < total) await yieldToMainThread()
   }
+}
+
+function applyPopulationSlice(
+  graph: SceneGraph,
+  delta: FigPopulationDelta,
+  createdFrom: number,
+  createdTo: number,
+  updatedFrom: number,
+  updatedTo: number,
+  deletedFrom: number,
+  deletedTo: number
+): void {
+  for (let index = createdFrom; index < createdTo; index++) {
+    const node = delta.created[index]?.[1]
+    if (node) graph.createNodeWithId(node.id, node.type, node.parentId, node)
+  }
+  for (let index = updatedFrom; index < updatedTo; index++) {
+    const change = delta.updated[index]
+    if (change) graph.updateNode(change[0], change[1])
+  }
+  for (let index = deletedFrom; index < deletedTo; index++) {
+    const id = delta.deleted[index]
+    if (id) graph.deleteNode(id)
+  }
+  // Instances copied onto the graph without `createNode` are not in the index yet. Touching
+  // them in this delta is what a later sync looks up. This does not walk the rest of the file.
+  for (let index = createdFrom; index < createdTo; index++) {
+    rememberInstance(graph, graph.getNode(delta.created[index]?.[1].id ?? ''))
+  }
+  for (let index = updatedFrom; index < updatedTo; index++) {
+    const id = delta.updated[index]?.[0]
+    if (id) rememberInstance(graph, graph.getNode(id))
+  }
+}
+
+function rememberInstance(graph: SceneGraph, node: SceneNode | undefined): void {
+  if (node?.type !== 'INSTANCE' || !node.componentId) return
+  const ids = graph.instanceIndex.get(node.componentId) ?? new Set<string>()
+  ids.add(node.id)
+  graph.instanceIndex.set(node.componentId, ids)
+}
+
+export function populationDeltaNeedsCooperativeApply(delta: FigPopulationDelta): boolean {
+  return (
+    delta.created.length + delta.updated.length + delta.deleted.length > POPULATION_SLICE_NODES
+  )
 }

@@ -7,6 +7,8 @@ export const APP_DATABASE_NAMES = {
   outbox: 'open-pencil-cloud-outbox',
   recovery: 'open-pencil-recovery',
   diagnostics: 'open-pencil-diagnostics',
+  /** Image bytes for a collab room, kept out of the Y.Doc snapshot. */
+  roomImages: 'open-pencil-room-images',
   /** Written and deleted once per page, to learn whether the engine stores Blobs. */
   blobProbe: 'open-pencil-blob-probe'
 } as const

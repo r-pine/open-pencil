@@ -8,9 +8,17 @@ import {
   createAnthropicCompatibleAdapter,
   createOpenAICompatibleAdapter
 } from '@/app/ai/providers/compatible'
+import { cursorChatFetch } from '@/app/ai/providers/cursor/event-stream'
 import type { ModelProviderAdapter } from '@/app/ai/providers/types'
 
 type DirectProviderID = Exclude<AIProviderID, `acp:${string}` | `harness:${string}`>
+
+function cursorBridgeBaseURL(): string {
+  if (typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null') {
+    return `${window.location.origin}/api/cursor`
+  }
+  return 'http://127.0.0.1/api/cursor'
+}
 
 const MODEL_PROVIDER_ADAPTERS = {
   openrouter: {
@@ -42,6 +50,14 @@ const MODEL_PROVIDER_ADAPTERS = {
   },
   zai: createAnthropicCompatibleAdapter({ baseURL: 'https://api.z.ai/api/anthropic' }),
   minimax: createOpenAICompatibleAdapter({ baseURL: 'https://api.minimax.io/v1', mode: 'chat' }),
+  cursor: {
+    create(config, runtime) {
+      return createOpenAICompatibleAdapter({
+        baseURL: cursorBridgeBaseURL,
+        mode: 'chat'
+      }).create(config, { fetch: cursorChatFetch(runtime.fetch) })
+    }
+  },
   'openai-compatible': createOpenAICompatibleAdapter({
     baseURL: (config) => config.customBaseURL,
     mode: 'configurable'

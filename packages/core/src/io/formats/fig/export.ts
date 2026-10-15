@@ -31,6 +31,7 @@ import {
   populateFigInternalPages,
   populateReaderExport
 } from '#core/kiwi/fig/session/document-state'
+import { isPortCloneFailure } from '#core/kiwi/fig/session/archive'
 import { originalFigArchive } from '#core/kiwi/fig/session/original-archive'
 
 import {
@@ -239,6 +240,30 @@ function canUseWorker(): boolean {
   return typeof Worker !== 'undefined' && IS_BROWSER
 }
 
+/** Past this, cloning the encoded file into the compress worker runs out of memory. */
+const MAX_COMPRESS_WORKER_BYTES = 8 * 1024 * 1024
+
+function compressPayloadBytes(
+  schemaDeflated: Uint8Array,
+  kiwiData: Uint8Array,
+  thumbnailPNG: Uint8Array,
+  metaJSON: string,
+  imageEntries: Array<{ name: string; data: Uint8Array }>
+): number {
+  let bytes =
+    schemaDeflated.byteLength + kiwiData.byteLength + thumbnailPNG.byteLength + metaJSON.length
+  for (const image of imageEntries) bytes += image.data.byteLength
+  return bytes
+}
+
+function ownedBuffer(bytes: Uint8Array, transfer: ArrayBuffer[]): Uint8Array {
+  if (bytes.byteLength === 0) return bytes
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  transfer.push(copy.buffer)
+  return copy
+}
+
 function compressViaWorker(
   schemaDeflated: Uint8Array,
   kiwiData: Uint8Array,
@@ -261,18 +286,24 @@ function compressViaWorker(
       worker.terminate()
     }
 
-    // Do NOT use transferables here. toUint8Array() in ByteBuffer returns a view of the
-    // internal buffer, so transferring kiwiData.buffer or schemaDeflated.buffer detaches
-    // buffers that may be shared with other views, causing "already detached" errors on
-    // subsequent saves. Structured clone (the default) copies the data safely.
-    worker.postMessage({
-      schemaDeflated,
-      kiwiData,
-      thumbnailPNG,
-      metaJSON,
-      images: imageEntries,
-      figKiwiVersion
-    })
+    // Copy first. ByteBuffer views share a backing store, and transferring that store would
+    // detach every other view. The copies are transferred so the worker does not clone them.
+    const transfer: ArrayBuffer[] = []
+    const images = imageEntries.map((image) => ({
+      name: image.name,
+      data: ownedBuffer(image.data, transfer)
+    }))
+    worker.postMessage(
+      {
+        schemaDeflated: ownedBuffer(schemaDeflated, transfer),
+        kiwiData: ownedBuffer(kiwiData, transfer),
+        thumbnailPNG: ownedBuffer(thumbnailPNG, transfer),
+        metaJSON,
+        images,
+        figKiwiVersion
+      },
+      transfer
+    )
   })
 }
 
@@ -284,7 +315,11 @@ export function compressFigData(
   imageEntries: Array<{ name: string; data: Uint8Array }>,
   figKiwiVersion?: number
 ): Promise<Uint8Array> {
-  if (canUseWorker()) {
+  if (
+    canUseWorker() &&
+    compressPayloadBytes(schemaDeflated, kiwiData, thumbnailPNG, metaJSON, imageEntries) <=
+      MAX_COMPRESS_WORKER_BYTES
+  ) {
     return compressViaWorker(
       schemaDeflated,
       kiwiData,
@@ -292,7 +327,17 @@ export function compressFigData(
       metaJSON,
       imageEntries,
       figKiwiVersion
-    )
+    ).catch((error: unknown) => {
+      if (!isPortCloneFailure(error)) throw error
+      return compressFigDataSync(
+        schemaDeflated,
+        kiwiData,
+        thumbnailPNG,
+        metaJSON,
+        imageEntries,
+        figKiwiVersion
+      )
+    })
   }
   return Promise.resolve(
     compressFigDataSync(

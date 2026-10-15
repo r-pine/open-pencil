@@ -6,7 +6,11 @@ import { archiveChanges, trackArchiveChanges } from '#core/kiwi/fig/session/arch
 import { updateReaderRecovery, releaseReaderRecovery } from '#core/kiwi/fig/session/document-state'
 import type { FigSessionResponse } from '#core/kiwi/fig/session/protocol'
 
-import { applyFigPopulationDelta } from './delta'
+import {
+  applyFigPopulationDelta,
+  applyFigPopulationDeltaCooperatively,
+  populationDeltaNeedsCooperativeApply
+} from './delta'
 
 /** The two responses this client acts on, taken from the session protocol itself. */
 type WorkerResult = Extract<FigSessionResponse, { type: 'population-result' | 'population-error' }>
@@ -204,7 +208,13 @@ export function createPopulationWorkerClient(
   }
   unbind = graph.onNodeEvents({
     created: invalidate,
-    updated: invalidate,
+    // A shader frame writes pluginData after layout. That is not a user edit of the file the
+    // worker parsed, and treating it as one sends the next page switch through main-thread recovery.
+    updated: (_id, changes) => {
+      const keys = Object.keys(changes)
+      if (keys.length > 0 && keys.every((key) => key === 'pluginData')) return
+      invalidate()
+    },
     deleted: invalidate,
     reparented: invalidate,
     reordered: invalidate
@@ -222,25 +232,34 @@ export function createPopulationWorkerClient(
     }
     applyingDelta = true
     const applyStartedAt = performance.now()
-    try {
-      applyFigPopulationDelta(graph, result.delta)
-      if (result.checkpoint) updateReaderRecovery(graph, result.checkpoint)
-    } catch {
+    const finish = (populated: boolean) => {
       applyingDelta = false
-      fail()
-      return request.resolve(null)
-    } finally {
-      applyingDelta = false
+      request.resolve(populated)
+      emitTelemetry({
+        event: 'populate',
+        durationMs: performance.now() - request.startedAt,
+        applyMs: performance.now() - applyStartedAt,
+        created: result.delta.created.length,
+        updated: result.delta.updated.length,
+        deleted: result.delta.deleted.length
+      })
     }
-    request.resolve(result.populated)
-    emitTelemetry({
-      event: 'populate',
-      durationMs: performance.now() - request.startedAt,
-      applyMs: performance.now() - applyStartedAt,
-      created: result.delta.created.length,
-      updated: result.delta.updated.length,
-      deleted: result.delta.deleted.length
-    })
+    const apply = async () => {
+      try {
+        if (populationDeltaNeedsCooperativeApply(result.delta)) {
+          await applyFigPopulationDeltaCooperatively(graph, result.delta)
+        } else {
+          applyFigPopulationDelta(graph, result.delta)
+        }
+        if (result.checkpoint) updateReaderRecovery(graph, result.checkpoint)
+        finish(result.populated)
+      } catch {
+        applyingDelta = false
+        fail()
+        request.resolve(null)
+      }
+    }
+    void apply()
   }
   if (port) {
     port.onmessage = (event: MessageEvent<WorkerResult>) => receive(event.data)

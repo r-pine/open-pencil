@@ -1,6 +1,7 @@
 import type { SceneGraph, SceneNode } from '@open-pencil/scene-graph'
 
 import { DEFAULT_FONT_FAMILY } from '#core/constants'
+import { MAIN_THREAD_SLICE_MS, nowMs, yieldToMainThread } from '#core/editor/main-thread'
 import { shownCharacters } from '#core/text/case'
 import { cjkFallbackScriptForLanguage, type FontFallbackScript } from '#core/text/fallbacks'
 import { weightToStyle } from '#core/text/font/style'
@@ -63,6 +64,10 @@ export interface GraphFontRequirements {
   scripts: FontFallbackScript[]
 }
 
+export interface CooperativeFontRequirements extends GraphFontRequirements {
+  fontKeys: Array<[string, string]>
+}
+
 export function collectGraphFontRequirements(
   graph: SceneGraph,
   nodeIds: readonly string[]
@@ -85,4 +90,56 @@ export function collectGraphFontRequirements(
   }
   for (const nodeId of nodeIds) collect(nodeId)
   return { characters: Array.from(characters).join(''), nodes, scripts: Array.from(scripts) }
+}
+
+/**
+ * The same requirements as `collectGraphFontRequirements`, returning to the event loop while a
+ * large page is scanned. Null when `shouldContinue` fails, so a newer page switch can abandon it.
+ */
+export async function collectGraphFontRequirementsCooperatively(
+  graph: SceneGraph,
+  nodeIds: readonly string[],
+  shouldContinue: () => boolean = () => true
+): Promise<CooperativeFontRequirements | null> {
+  const characters = new Set<string>()
+  const nodes: SceneNode[] = []
+  const scripts = new Set<FontFallbackScript>()
+  const fontKeys = new Set<string>()
+  const stack = [...nodeIds].reverse()
+  let scanned = 0
+  let slice = nowMs()
+  while (stack.length > 0) {
+    const nodeId = stack.pop()
+    if (!nodeId) continue
+    const node = graph.getNode(nodeId)
+    if (!node) continue
+    nodes.push(node)
+    if (node.type === 'TEXT') {
+      for (const { family, style } of collectNodeFontFaces(node)) {
+        fontKeys.add(`${family}\0${style}`)
+      }
+      for (const { character, sourceIndex } of shownCharacters(node)) {
+        characters.add(character)
+        const script = fallbackScriptForCharacter(character, textLanguageAt(node, sourceIndex))
+        if (script) scripts.add(script)
+      }
+    }
+    for (let index = node.childIds.length - 1; index >= 0; index--) {
+      const childId = node.childIds[index]
+      if (childId) stack.push(childId)
+    }
+    scanned++
+    if (scanned % 400 === 0 && nowMs() - slice >= MAIN_THREAD_SLICE_MS) {
+      if (!shouldContinue()) return null
+      await yieldToMainThread()
+      if (!shouldContinue()) return null
+      slice = nowMs()
+    }
+  }
+  return {
+    characters: Array.from(characters).join(''),
+    nodes,
+    scripts: Array.from(scripts),
+    fontKeys: Array.from(fontKeys, (key) => key.split('\0') as [string, string])
+  }
 }

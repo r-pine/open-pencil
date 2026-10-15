@@ -41,7 +41,19 @@ const BUNDLED_FONTS: Record<string, string> = {
   'Inter|SemiBold': '/Inter-SemiBold.ttf',
   'Inter|Bold': '/Inter-Bold.ttf',
   'Inter|ExtraBold': '/Inter-ExtraBold.ttf',
-  'Noto Naskh Arabic|Regular': '/NotoNaskhArabic-Regular.ttf'
+  'Noto Naskh Arabic|Regular': '/NotoNaskhArabic-Regular.ttf',
+  'Tahoma|Regular': '/Tahoma-Regular.ttf',
+  'Tahoma|Bold': '/Tahoma-Bold.ttf',
+  'Tahoma|Italic': '/Tahoma-Italic.ttf',
+  'Tahoma|Regular Italic': '/Tahoma-Italic.ttf',
+  'Verdana|Regular': '/Verdana-Regular.ttf',
+  'Verdana|Bold': '/Verdana-Bold.ttf',
+  'Verdana|Italic': '/Verdana-Italic.ttf',
+  'Verdana|Regular Italic': '/Verdana-Italic.ttf',
+  'Arial|Regular': '/Arial-Regular.ttf',
+  'Arial Black|Black': '/ArialBlack-Black.ttf',
+  'Arial Black|Regular': '/ArialBlack-Black.ttf',
+  'Noto Color Emoji|Regular': '/NotoColorEmoji-Regular.ttf'
 }
 
 /**

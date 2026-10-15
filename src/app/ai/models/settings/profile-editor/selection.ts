@@ -29,7 +29,11 @@ export function useProfileModelSelection(
   )
   const catalogProviderID = computed(() => draft.providerID)
   const fallbackModels = computed(() => providerDef.value.models)
-  const { models: availableModels } = useProviderModelCatalog(catalogProviderID, fallbackModels)
+  const cursorModels = ref<ModelOption[]>([])
+  const { models: catalogModels } = useProviderModelCatalog(catalogProviderID, fallbackModels)
+  const availableModels = computed(() =>
+    draft.providerID === 'cursor' && cursorModels.value.length ? cursorModels.value : catalogModels.value
+  )
   const isACP = computed(() => draft.providerID.startsWith('acp:'))
   const isHarness = computed(() => draft.providerID === 'harness:pi')
   const supportsThinking = computed(() => supportsThinkingLevel(draft.providerID))
@@ -118,8 +122,21 @@ export function useProfileModelSelection(
     draft.maxOutputTokens = outputTokenRecommendation.value
   }
 
+  function setCursorModels(models: ModelOption[]): void {
+    cursorModels.value = models
+    if (draft.providerID !== 'cursor' || !models.length) return
+    if (!models.some((model) => model.id === draft.modelID)) {
+      draft.modelID = models[0]?.id ?? ''
+      customModelSelected.value = false
+      draft.customModelID = ''
+    }
+    catalogModel.value = models.find((model) => model.id === draft.modelID) ?? null
+    applyKnownModelMetadata()
+  }
+
   function updateProvider(providerID: AIProviderID): void {
     catalogModel.value = null
+    cursorModels.value = []
     draft.providerID = providerID
     draft.sourceConnectionId = null
     const provider = AI_PROVIDERS.find((definition) => definition.id === providerID)
@@ -181,6 +198,7 @@ export function useProfileModelSelection(
     toolsEnabled,
     visionEnabled,
     applyKnownModelMetadata,
+    setCursorModels,
     updateProvider,
     updateModel
   }

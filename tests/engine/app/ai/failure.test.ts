@@ -7,6 +7,7 @@ import {
   classifyAIChatFinish,
   isInsufficientCreditError
 } from '@/app/ai/chat/failure'
+import { CursorEventStreamStallError } from '@/app/ai/providers/cursor/event-stream'
 
 describe('AI chat failures', () => {
   test('recognizes provider credit and quota failures', () => {
@@ -68,6 +69,19 @@ describe('AI chat failures', () => {
     expect(classifyAIChatError(new Error('Invalid API key.')).reason).toBe('authentication')
     expect(classifyAIChatError(new Error('Failed to fetch provider')).reason).toBe('network')
     expect(classifyAIChatError(new Error('Provider unavailable')).reason).toBe('request-failed')
+  })
+
+  test('classifies a cursor stream that never sent a data event', () => {
+    const stall = new CursorEventStreamStallError()
+    const wrapped = new APICallError({
+      message: 'Failed to process successful response',
+      url: 'https://pencil.example/api/cursor/chat/completions',
+      requestBodyValues: {},
+      statusCode: 200,
+      cause: stall
+    })
+    expect(classifyAIChatError(stall).reason).toBe('stalled')
+    expect(classifyAIChatError(wrapped)).toMatchObject({ reason: 'stalled', statusCode: 200 })
   })
 
   test('retains request details for diagnostics', () => {

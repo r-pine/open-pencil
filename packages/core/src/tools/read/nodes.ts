@@ -1,8 +1,45 @@
 import * as v from 'valibot'
 
-import type { FigmaNodeProxy } from '#core/figma-api'
+import type { FigmaAPI, FigmaNodeProxy } from '#core/figma-api'
 import { toolNumber, nodeIdInput } from '#core/tools/input'
 import { defineTool, nodeSummary, nodeToResult } from '#core/tools/schema'
+
+/** Figma-style `session:local` ids. A miss of this shape stays a miss, not a name lookup. */
+const NODE_ID_SHAPE = /^\d+:\d+$/
+
+/**
+ * The label a referenced node shows the model: one line, with whitespace collapsed.
+ * The same form is how a layer name is compared when `id` is not an id.
+ */
+function nodeLabel(value: string): string {
+  return value
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Models sometimes pass a layer name, or the label from a referenced node, where `id` belongs.
+ * An existing id is kept. A non-id string that matches exactly one node on the current page
+ * becomes that node's id before the missing-node result. Two matches stay an error.
+ */
+function resolveGetNodeId(figma: FigmaAPI, id: string): string | { error: string } {
+  if (figma.getNodeById(id)) return id
+  if (NODE_ID_SHAPE.test(id)) return { error: `Node "${id}" not found` }
+
+  const label = nodeLabel(id)
+  if (!label) return { error: `Node "${id}" not found` }
+
+  const matches = figma.currentPage.findAll((node) => nodeLabel(node.name) === label)
+  if (matches.length === 1) {
+    const only = matches[0]
+    return only ? only.id : { error: `Node "${id}" not found` }
+  }
+  if (matches.length > 1) {
+    return { error: `Node name "${label}" matches more than one node. Pass an id.` }
+  }
+  return { error: `Node "${id}" not found` }
+}
 
 interface TreeEntry {
   id: string
@@ -96,7 +133,7 @@ export const getPageTree = defineTool({
 export const getNode = defineTool({
   name: 'get_node',
   description:
-    'Get detailed properties of a node by ID. Use depth to limit child recursion (0 = node only, 1 = direct children, etc). Default: unlimited.',
+    'Get detailed properties of one node. Pass its id as the `id` argument — the id returned by get_page_tree, get_selection, or find_nodes. A name that matches exactly one layer on the current page is resolved to that id; a name that matches more than one is an error. Use depth to limit child recursion (0 = node only, 1 = direct children). Default depth: unlimited.',
   execution: { kind: 'sync', mutation: 'none' },
   input: v.strictObject({
     id: nodeIdInput,
@@ -110,7 +147,9 @@ export const getNode = defineTool({
     )
   }),
   execute: (figma, { id, depth }) => {
-    const node = figma.getNodeById(id)
+    const resolved = resolveGetNodeId(figma, id)
+    if (typeof resolved !== 'string') return resolved
+    const node = figma.getNodeById(resolved)
     if (!node) return { error: `Node "${id}" not found` }
     return nodeToResult(node, depth)
   }

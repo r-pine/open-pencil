@@ -60,7 +60,9 @@ function createColorPickerPanelContext(props: ColorPanelProps, emit: ColorPanelE
     updateRGBChannelValue: colorModel.updateRGBChannel,
     updateHSLChannelValue: colorModel.updateHSLChannel,
     updateHSBChannelValue: colorModel.updateHSBChannel,
-    updateOkHCLChannel: colorModel.updateOkHCLChannel
+    updateOkHCLChannel: colorModel.updateOkHCLChannel,
+    updateHex: colorModel.updateHex,
+    updateColor: colorModel.updateColor
   }
 }
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, useTemplateRef } from 'vue'
+import type { Ref } from 'vue'
 
 import type { AIProviderID } from '@open-pencil/core/constants'
 import { useI18n } from '@open-pencil/vue'
@@ -7,6 +8,8 @@ import { useI18n } from '@open-pencil/vue'
 import { usePiSetup } from '@/app/ai/agents/setup'
 import { useModelProfileFeedback } from '@/app/ai/models/settings/profile-editor/feedback'
 import { useModelProfileEditor } from '@/app/ai/models/settings/profile-editor/use'
+import { useCursorProfile } from '@/app/ai/providers/cursor/profile'
+import type { CursorSession } from '@/app/ai/providers/cursor/session'
 import { thinkingLevelOptions as buildThinkingLevelOptions } from '@/app/ai/models/thinking'
 import { useSettingsFormGuard } from '@/app/settings/navigation/use'
 import PiSetup from '@/components/settings/agents/PiSetup.vue'
@@ -34,7 +37,8 @@ const nameInput = useTemplateRef('nameInput')
 defineExpose({ focus: () => nameInput.value?.focus({ preventScroll: true }) })
 const keyInput = ref('')
 const deleteOpen = ref(false)
-const profile = useModelProfileEditor({ profileId, keyInput, labels: ai })
+const cursorSession = ref(null) as Ref<CursorSession | null>
+const profile = useModelProfileEditor({ profileId, keyInput, labels: ai, cursorSession })
 const {
   draft,
   dirty,
@@ -64,6 +68,28 @@ const pi = usePiSetup(isHarness)
 const customModelPlaceholder = computed(() =>
   isHarness.value ? (pi.state.value?.defaultModel ?? 'provider/model') : 'e.g. llama-3.3-70b'
 )
+const cursor = useCursorProfile({
+  draft,
+  keyInput,
+  hasExistingKey,
+  session: cursorSession,
+  setModels: profile.setCursorModels
+})
+const {
+  status: cursorStatus,
+  modelsStatus: cursorModelsStatus,
+  signIn: cursorSignIn,
+  reopen: cursorReopen,
+  cancel: cursorCancel
+} = cursor
+const cursorMessage = computed(() => {
+  if (cursor.status.value === 'blocked') return ai.value.cursorSignInBlocked
+  if (cursor.status.value === 'expired') return ai.value.cursorSignInExpired
+  if (cursor.status.value === 'failed') return ai.value.cursorSignInFailed
+  if (cursor.modelsStatus.value === 'error') return ai.value.cursorModelsError
+  if (cursor.modelsStatus.value === 'empty') return ai.value.cursorModelsEmpty
+  return ''
+})
 const feedback = useModelProfileFeedback(profile, keyInput, settings)
 const { errors: fieldErrors } = feedback
 const busy = computed(() => saving.value || connectionTestStatus.value === 'testing')
@@ -72,6 +98,7 @@ useSettingsFormGuard({ dirty, busy, cancel: () => emit('done') })
 const CUSTOM_MODEL_VALUE = '__custom__'
 const advancedOpen = ref(Boolean(draft.customModelID.trim()))
 function updateProvider(id: AIProviderID) {
+  cursorCancel()
   profile.updateProvider(id)
   advancedOpen.value = id === 'harness:pi'
 }
@@ -232,12 +259,50 @@ async function remove() {
               />
             </ProviderSettingsField>
 
+            <div v-if="draft.providerID === 'cursor'" class="flex flex-col gap-2">
+              <div v-if="cursorStatus === 'waiting'" class="flex items-center justify-between gap-2">
+                <p class="text-[11px] text-muted" role="status">{{ ai.cursorSignInWaiting }}</p>
+                <div class="flex gap-2">
+                  <AppButton size="xs" variant="outline" type="button" @click="cursorReopen()">
+                    {{ ai.cursorSignInReopen }}
+                  </AppButton>
+                  <AppButton size="xs" type="button" @click="cursorCancel()">
+                    {{ common.cancel }}
+                  </AppButton>
+                </div>
+              </div>
+              <AppButton
+                v-else
+                class="self-start"
+                color="primary"
+                variant="solid"
+                type="button"
+                :disabled="busy"
+                @click="cursorSignIn()"
+              >
+                {{ ai.cursorSignIn }}
+              </AppButton>
+              <p v-if="cursorStatus === 'ready'" class="text-[11px] text-muted" role="status">
+                {{ ai.cursorSignedIn }}
+              </p>
+              <p v-if="cursorModelsStatus === 'loading'" class="text-[11px] text-muted" role="status">
+                {{ ai.cursorModelsLoading }}
+              </p>
+              <p v-if="cursorMessage" class="text-xs text-error" role="alert">{{ cursorMessage }}</p>
+            </div>
+
             <ProviderSettingsKeyField
               v-model="keyInput"
               :label="ai.apiKey"
               :saved="hasExistingKey"
               :hint="
-                hasExistingKey ? settings.savedCredentialHint : settings.optionalCredentialHint
+                draft.providerID === 'cursor'
+                  ? hasExistingKey
+                    ? settings.savedCredentialHint
+                    : ai.cursorKeyHint
+                  : hasExistingKey
+                    ? settings.savedCredentialHint
+                    : settings.optionalCredentialHint
               "
               :error="fieldErrors.credential"
               @blur="feedback.blur('credential')"

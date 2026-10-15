@@ -4,6 +4,7 @@ import * as Y from 'yjs'
 
 import { SceneGraph } from '@open-pencil/scene-graph'
 
+import type { CollabImageBytes } from '@/app/collab/room/images'
 import {
   bindCollabGraphEvents,
   createYjsGraphSync,
@@ -20,14 +21,18 @@ export type SyncedStores = ReturnType<typeof createSyncedStores>
 export type SyncedStoreOptions = {
   hostDoc?: Y.Doc
   peerDoc?: Y.Doc
+  hostGraph?: SceneGraph
+  peerGraph?: SceneGraph
   connectImmediately?: boolean
   /** Sync local graph edits to Yjs through graph events, as a collab session does. */
   bindGraphEvents?: boolean
+  hostImageBytes?: CollabImageBytes
+  peerImageBytes?: CollabImageBytes
 }
 
 export function createSyncedStores(options: SyncedStoreOptions = {}) {
-  const hostStore = createEditorStore(new SceneGraph())
-  const peerStore = createEditorStore(new SceneGraph())
+  const hostStore = createEditorStore(options.hostGraph ?? new SceneGraph())
+  const peerStore = createEditorStore(options.peerGraph ?? new SceneGraph())
   const hostDoc = options.hostDoc ?? new Y.Doc()
   const peerDoc = options.peerDoc ?? new Y.Doc()
   const hostNodes = hostDoc.getMap<Y.Map<unknown>>('nodes')
@@ -43,19 +48,19 @@ export function createSyncedStores(options: SyncedStoreOptions = {}) {
     getStore: () => hostStore,
     getYdoc: () => hostDoc,
     getYnodes: () => hostNodes,
-    getYimages: () => hostImages,
     setSuppressYjsEvents: (value) => {
       hostSuppressYjsEvents = value
-    }
+    },
+    images: options.hostImageBytes
   })
   const peerSync = createYjsGraphSync({
     getStore: () => peerStore,
     getYdoc: () => peerDoc,
     getYnodes: () => peerNodes,
-    getYimages: () => peerImages,
     setSuppressYjsEvents: (value) => {
       peerSuppressYjsEvents = value
-    }
+    },
+    images: options.peerImageBytes
   })
 
   registerYjsObservers({

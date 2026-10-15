@@ -45,7 +45,14 @@ export interface FigSessionComponentPagesRequest {
 export interface FigSessionPatchArchiveRequest {
   type: 'patch-archive'
   requestId: string
-  patch: FigRecordPatch
+  /**
+   * `encodeFigPatchRecords` output: one Kiwi `nodeChanges` message. Transferred, not cloned.
+   * The worker decodes it with the archive schema it already holds.
+   */
+  records: Uint8Array
+  blobs: Uint8Array[]
+  removed: FigRecordPatch['removed']
+  replaceVariables: boolean
   input: FigPatchedArchiveInput
 }
 

@@ -10,6 +10,18 @@ import type { CollabAction, CollabMediaTransport, JoinCollabRoom } from './types
  */
 const TRYSTERO_DISCOVERY_MS = 12_000
 
+/**
+ * The site's own MQTT websocket. Public clouds are not a fallback: a hung broker handshake
+ * stays Pending in Chrome and mqtt.js opens another socket on every retry.
+ */
+function signalingBrokerUrl(): string {
+  const deployed = 'wss://pencil.rpine.xyz/mqtt'
+  if (typeof location === 'undefined') return deployed
+  if (location.protocol !== 'http:' && location.protocol !== 'https:') return deployed
+  const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${wsProtocol}//${location.host}/mqtt`
+}
+
 function trysteroMedia(room: Room): CollabMediaTransport {
   return {
     addTrack(track, stream, peerId) {
@@ -48,6 +60,7 @@ export const joinTrysteroCollabRoom: JoinCollabRoom = (roomId) => {
   const room = joinTrysteroRoom(
     {
       appId: COLLAB_APP_ID,
+      relayConfig: { urls: [signalingBrokerUrl()] },
       rtcConfig: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },

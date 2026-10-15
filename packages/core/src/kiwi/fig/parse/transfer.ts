@@ -1,5 +1,9 @@
-import { SceneGraph } from '@open-pencil/scene-graph'
-import type { EnabledLibraryBinding, SceneNode } from '@open-pencil/scene-graph'
+import {
+  ensureInstanceOverrideState,
+  SceneGraph,
+  type EnabledLibraryBinding,
+  type SceneNode
+} from '@open-pencil/scene-graph'
 
 import type { PortableSceneGraphData } from '#core/kiwi/fig/parse/portable-data'
 
@@ -84,7 +88,8 @@ function normalizeImportedNode(
     guides: Array.isArray(node.guides) ? node.guides : [],
     variableBindingScales: { ...node.variableBindingScales },
     variableAssignmentScales: { ...node.variableAssignmentScales },
-    componentScale: node.componentScale ?? 1
+    componentScale: node.componentScale ?? 1,
+    instanceOverrides: ensureInstanceOverrideState(node.instanceOverrides)
   }
 }
 

@@ -84,8 +84,11 @@ export function parseFigFileViaWorker(
           const bytes = buffer.slice(0)
           registerReaderRecovery(graph, bytes, checkpoint)
           // The worker writes the archive back; without it the main thread does, from its copy.
-          const archive = workerFigArchive(channel.port1, worker, () =>
-            localFigArchive(bytes, () => archiveInfo)
+          const archive = workerFigArchive(
+            channel.port1,
+            worker,
+            () => localFigArchive(bytes, () => archiveInfo),
+            graph.figSchemaDeflated
           )
           registerFigPopulationWorker(graph, worker, channel.port1, () => archive.dropWorker())
           registerFigArchive(graph, archive)

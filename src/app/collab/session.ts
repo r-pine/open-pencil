@@ -9,6 +9,8 @@ import { buildRemotePeers } from '@/app/collab/awareness'
 import { useCollabIdentity } from '@/app/collab/identity'
 import { publishLocalAgents } from '@/app/collab/local-awareness'
 import { connectCollabRoom } from '@/app/collab/room/connection'
+import { replaceRoomSnapshot, settleRoomImages } from '@/app/collab/room/image-sync'
+import { createRoomImageBytes } from '@/app/collab/room/images'
 import { deriveRoomStatus, type RoomStatus } from '@/app/collab/room/status'
 import {
   readRoomName,
@@ -24,7 +26,10 @@ import { attachRoomVoice, type RoomVoice } from '@/app/collab/voice/room'
 import {
   bindCollabGraphEvents,
   createYjsGraphSync,
-  registerYjsObservers
+  registerYjsObservers,
+  BULK_SHARE_ORIGIN,
+  remoteUpdateIsHistoricalDump,
+  SYNC_ALL_NODES_SYNC_LIMIT
 } from '@/app/collab/yjs-sync'
 import type { EditorStore } from '@/app/editor/active-store'
 import { setPeers } from '@/app/presence/registry'
@@ -55,6 +60,10 @@ export interface RoomSession {
 export interface RoomSavedCopy {
   whenSynced: Promise<unknown>
   destroy(): unknown
+  /** Rewrites the saved Yjs updates after image bytes leave the document. */
+  replaceStoredState?(): Promise<void>
+  /** Reads saved updates one record at a time, without joining them into one buffer. */
+  replayUpdates?(send: (update: Uint8Array, peerId: string) => void, peerId: string): void
 }
 
 export interface RoomSessionOptions {
@@ -65,14 +74,98 @@ export interface RoomSessionOptions {
   /** Who this tab is in the room; the device's own identity unless a host stands in for one. */
   identity?: Pick<ReturnType<typeof useCollabIdentity>, 'name' | 'color'>
   openSavedCopy?: (roomId: string, ydoc: Y.Doc) => RoomSavedCopy
+  /**
+   * Byte length of the .fig this tab opened. First-page populate leaves most of a large
+   * archive out of `graph.nodes`, so the layer count cannot decide this.
+   */
+  archiveBytes?: number
   /** How long the tab tries to reach the service that introduces peers before saying it cannot. */
   unreachableMs?: number
   /** How often the tab rechecks its connection while it waits for the file. */
   tickMs?: number
 }
 
+/**
+ * A `.fig` larger than this is not a document whose whole graph fits in a room database.
+ * aska-app is about 35MB and opens with `populate: 'first-page'`, so the canvas holds the
+ * cover (about 100 layers) while the saved room snapshot still holds the old full dump.
+ * Opening that database applies the dump in one synchronous transaction.
+ */
+export const LARGE_FIG_ARCHIVE_BYTES = 8 * 1024 * 1024
+
+/**
+ * Room IndexedDB is safe only for a document whose whole graph is already in memory and whose
+ * archive is small. A first-page open of a large fig fails this even when `graphNodes` is 97.
+ */
+export function shouldOpenRoomDatabase(graphNodes: number, archiveBytes?: number): boolean {
+  if (archiveBytes !== undefined && archiveBytes > LARGE_FIG_ARCHIVE_BYTES) return false
+  if (graphNodes > SYNC_ALL_NODES_SYNC_LIMIT) return false
+  return true
+}
+
+/**
+ * No room database. `IndexeddbPersistence` would read the saved updates and apply them in one
+ * `Y.applyUpdate` before this tab can reject the dump.
+ */
+function openUnpersistedRoomCopy(): RoomSavedCopy {
+  return {
+    whenSynced: Promise.resolve(),
+    destroy() {
+      return undefined
+    }
+  }
+}
+
 function openIndexedDBCopy(roomId: string, ydoc: Y.Doc): RoomSavedCopy {
-  return new IndexeddbPersistence(`op-room-${roomId}`, ydoc)
+  const persistence = new IndexeddbPersistence(`op-room-${roomId}`, ydoc)
+  // y-indexeddb compacts every 500 updates with encodeStateAsUpdate of the whole document.
+  // That one buffer is the tab-killing allocation for a file the size of aska-app, so updates
+  // are appended and left as separate records.
+  const stopUncompactedStore = keepRoomUpdatesUncompacted(persistence, ydoc)
+  return {
+    whenSynced: persistence.whenSynced,
+    destroy: () => {
+      stopUncompactedStore()
+      return persistence.destroy()
+    },
+    replaceStoredState: () => replaceRoomSnapshot(persistence),
+    replayUpdates(send, peerId) {
+      const db = persistence.db
+      if (!db || persistence._destroyed) return
+      const request = db.transaction('updates', 'readonly').objectStore('updates').openCursor()
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (!cursor) return
+        if (cursor.value instanceof Uint8Array) send(cursor.value, peerId)
+        cursor.continue()
+      }
+    }
+  }
+}
+
+function keepRoomUpdatesUncompacted(persistence: IndexeddbPersistence, ydoc: Y.Doc): () => void {
+  ydoc.off('update', persistence._storeUpdate)
+  const storeUpdate = (update: Uint8Array, origin: unknown) => {
+    // A bulk share is one update per chunk. Persisting them makes the next open apply the
+    // whole room in a single y-indexeddb transaction. Edits after that stay small and are kept.
+    if (
+      origin === persistence ||
+      origin === BULK_SHARE_ORIGIN ||
+      persistence._destroyed ||
+      update.byteLength > 256 * 1024
+    ) {
+      return
+    }
+    const db = persistence.db
+    if (!db) return
+    try {
+      db.transaction('updates', 'readwrite').objectStore('updates').add(update)
+    } catch (error) {
+      console.error('[Collab] Failed to store a room update:', error)
+    }
+  }
+  ydoc.on('update', storeUpdate)
+  return () => ydoc.off('update', storeUpdate)
 }
 
 type CursorState = { x: number; y: number; pageId: string; zoom: number }
@@ -84,6 +177,7 @@ export function openRoomSession({
   joinRoom,
   identity = useCollabIdentity(),
   openSavedCopy = openIndexedDBCopy,
+  archiveBytes,
   unreachableMs = ROOM_UNREACHABLE_MS,
   tickMs = ROOM_STATUS_TICK_MS
 }: RoomSessionOptions): RoomSession {
@@ -94,7 +188,15 @@ export function openRoomSession({
   const meta = ydoc.getMap<unknown>('meta')
   const yvariables: YRecords = ydoc.getMap('variables')
   const ycollections: YRecords = ydoc.getMap('collections')
-  const persistence = openSavedCopy(roomId, ydoc)
+  // y-indexeddb applies every saved update inside one Y.applyUpdate before any observer can
+  // refuse it. A large archive must not open that database at all. The in-memory layer count
+  // is not the signal: first-page populate of aska-app leaves about 97 layers on screen.
+  const persistence = shouldOpenRoomDatabase(store.graph.nodes.size, archiveBytes)
+    ? openSavedCopy(roomId, ydoc)
+    : openUnpersistedRoomCopy()
+  const roomImages = createRoomImageBytes(roomId)
+  const heldImages = new Map<string, Uint8Array>()
+  let imageSync: Promise<void> = Promise.resolve()
 
   const peers = shallowRef<RemotePeer[]>([])
   const hasDocument = ref(false)
@@ -124,11 +226,35 @@ export function openRoomSession({
     getStore: () => store,
     getYdoc: () => (disposed ? null : ydoc),
     getYnodes: () => (disposed ? null : ynodes),
-    getYimages: () => (disposed ? null : yimages),
     setSuppressYjsEvents: (value) => {
       suppressYjsEvents = value
-    }
+    },
+    images: roomImages
   })
+
+  function syncRoomImages() {
+    if (disposed) return
+    imageSync = imageSync
+      .then(async () => {
+        if (disposed) return undefined
+        await settleRoomImages({
+          store,
+          ydoc,
+          yimages,
+          held: heldImages,
+          images: roomImages,
+          setSuppressYjsEvents: (value) => {
+            suppressYjsEvents = value
+          },
+          replaceStoredState: persistence.replaceStoredState?.bind(persistence),
+          isActive: () => !disposed
+        })
+        return undefined
+      })
+      .catch((error: unknown) => {
+        console.error('[Collab] Failed to settle room images:', error)
+      })
+  }
 
   function refreshDocument() {
     if (disposed) return
@@ -167,6 +293,13 @@ export function openRoomSession({
     applyYjsToGraph: (events) => {
       sync.applyYjsToGraph(events)
       refreshDocument()
+    },
+    rememberSharedImage: (hash, bytes) => {
+      heldImages.set(hash, bytes)
+    },
+    onSharedImagesAdded: () => {
+      if (!savedCopyLoaded.value || disposed) return
+      syncRoomImages()
     }
   })
   meta.observe(refreshDocument)
@@ -177,16 +310,40 @@ export function openRoomSession({
     ydoc,
     awareness,
     updatePeersList: updatePeers,
-    joinRoom
+    joinRoom,
+    replayStoredUpdates: persistence.replayUpdates?.bind(persistence),
+    acceptRemoteUpdate(update) {
+      if (!remoteUpdateIsHistoricalDump(store.graph.nodes.size, update.byteLength)) return true
+      console.warn(
+        '[Collab] Skipped a historical room snapshot; the open file stays as it is.'
+      )
+      return false
+    }
   })
   broadcastIdentity()
 
-  void persistence.whenSynced.then(() => {
-    if (disposed) return undefined
+  // y-indexeddb resolves whenSynced only after a successful read, and never rejects it.
+  // A stuck database would otherwise leave the room on "connecting" with the spinner up.
+  const savedCopyTimer = setTimeout(() => {
+    if (disposed || savedCopyLoaded.value) return
     savedCopyLoaded.value = true
-    refreshDocument()
-    return undefined
-  })
+  }, unreachableMs)
+  void persistence.whenSynced.then(
+    () => {
+      if (disposed) return undefined
+      clearTimeout(savedCopyTimer)
+      savedCopyLoaded.value = true
+      refreshDocument()
+      syncRoomImages()
+      return undefined
+    },
+    () => {
+      if (disposed) return undefined
+      clearTimeout(savedCopyTimer)
+      savedCopyLoaded.value = true
+      return undefined
+    }
+  )
   // Signaling services report no events, so the tab polls while it waits for the file.
   function checkConnection() {
     now.value = Date.now()
@@ -230,9 +387,16 @@ export function openRoomSession({
       awareness.setLocalStateField('selection', ids)
     },
     shareDocument() {
+      writeRoomName(meta, store.state.documentName)
+      // A large file is already on screen from S3. Copying its layers into the room walks
+      // them all after paint and freezes the tab. Presence and later edits still sync.
+      if (store.graph.nodes.size > SYNC_ALL_NODES_SYNC_LIMIT) {
+        sync.claimSharedDocument()
+        refreshDocument()
+        return
+      }
       sync.syncAllNodesToYjs()
       variableSync.share()
-      writeRoomName(meta, store.state.documentName)
       refreshDocument()
     },
     dispose() {
@@ -242,6 +406,7 @@ export function openRoomSession({
       variableSync.dispose()
       disposed = true
       connectionTimer.pause()
+      clearTimeout(savedCopyTimer)
       stopNameWatch()
       stopZoomWatch()
       stopAgentSync()

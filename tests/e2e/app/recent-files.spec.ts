@@ -2,7 +2,7 @@ import { expect, test } from '#tests/e2e/fixtures'
 
 test('keeps the New tab layout usable on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
-  await page.goto('/?recent-files')
+  await page.goto('/')
 
   const search = page.getByLabel('Search files…')
   await expect(search).toBeVisible()
@@ -17,7 +17,7 @@ test('keeps the New tab layout usable on mobile', async ({ page }) => {
 })
 
 test('opens to the recent-files home and starts a new document', async ({ page }) => {
-  await page.goto('/?recent-files')
+  await page.goto('/')
 
   await expect(page.getByTestId('recent-files-home')).toBeVisible()
   await expect(page.getByText('No recent files yet')).toBeVisible()

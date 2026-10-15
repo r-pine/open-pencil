@@ -1,4 +1,5 @@
 import {
+  encodeFigPatchRecords,
   figArchiveComponentUsePages,
   patchFigArchive,
   type FigArchiveRecordInfo,
@@ -93,6 +94,71 @@ type ArchivePort = Pick<MessagePort, 'postMessage' | 'addEventListener' | 'close
 type ArchiveWorker = Pick<Worker, 'terminate' | 'addEventListener'>
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 
+/** True when the session port could not take the patch, so the caller writes it instead. */
+export function isPortCloneFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  if (error.name === 'DataCloneError') return true
+  const message = error.message.toLowerCase()
+  return (
+    message.includes('could not be cloned') ||
+    message.includes('cannot be cloned') ||
+    message.includes('data cannot be cloned') ||
+    message.includes('out of memory') ||
+    message.includes('allocation failed') ||
+    message.includes('invalid message') ||
+    message.includes('archive schema') ||
+    message.includes('patch records')
+  )
+}
+
+function ownedBytes(bytes: Uint8Array, transfer: ArrayBuffer[]): Uint8Array {
+  if (bytes.byteLength === 0) return bytes
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  transfer.push(copy.buffer)
+  return copy
+}
+
+interface PortableArchivePatch {
+  records: Uint8Array
+  blobs: Uint8Array[]
+  removed: FigRecordPatch['removed']
+  replaceVariables: boolean
+  input: FigPatchedArchiveInput
+  transfer: ArrayBuffer[]
+}
+
+/**
+ * Records travel as Kiwi bytes the worker decodes with the schema it already holds.
+ * New blob and image bytes are copies: transferring them must not detach live `graph.images`
+ * buffers, the same reason a fig export does not transfer views it still holds.
+ */
+function portableArchivePatch(
+  schemaDeflated: Uint8Array,
+  patch: FigRecordPatch,
+  input: FigPatchedArchiveInput
+): PortableArchivePatch {
+  const transfer: ArrayBuffer[] = []
+  const records = encodeFigPatchRecords(schemaDeflated, patch.records)
+  transfer.push(records.buffer)
+  const thumbnailPNG = input.thumbnailPNG ? ownedBytes(input.thumbnailPNG, transfer) : undefined
+  return {
+    records,
+    blobs: patch.blobs.map((blob) => ownedBytes(blob, transfer)),
+    removed: patch.removed,
+    replaceVariables: patch.replaceVariables,
+    input: {
+      metaJSON: input.metaJSON,
+      ...(thumbnailPNG ? { thumbnailPNG } : {}),
+      images: input.images.map((image) => ({
+        name: image.name,
+        data: ownedBytes(image.data, transfer)
+      }))
+    },
+    transfer
+  }
+}
+
 export interface WorkerFigArchiveAccess extends FigArchiveAccess {
   /** Stop the worker now, as an abandoned page load does; requests continue on the fallback. */
   dropWorker(): void
@@ -112,8 +178,13 @@ interface WaitingRequest {
 export function workerFigArchive(
   port: ArchivePort,
   worker: ArchiveWorker,
-  fallback: () => FigArchiveAccess
+  fallback: () => FigArchiveAccess,
+  schemaDeflated: Uint8Array | null
 ): WorkerFigArchiveAccess {
+  const schema =
+    schemaDeflated && schemaDeflated.byteLength > 0
+      ? Uint8Array.from(schemaDeflated)
+      : null
   const pending = new Map<string, WaitingRequest>()
   let local: FigArchiveAccess | undefined
   let closed = false
@@ -140,7 +211,8 @@ export function workerFigArchive(
     message: DistributiveOmit<FigSessionRequest, 'requestId'>,
     type: T,
     read: (response: Extract<ArchiveResponse, { type: T }>) => Result,
-    onFallback: (access: FigArchiveAccess) => Promise<Result>
+    onFallback: (access: FigArchiveAccess) => Promise<Result>,
+    transfer: ArrayBuffer[] = []
   ): Promise<Result> => {
     if (closed) return Promise.reject(new Error('The document closed'))
     if (local) return onFallback(local)
@@ -155,7 +227,12 @@ export function workerFigArchive(
         },
         reject
       })
-      port.postMessage({ ...message, requestId })
+      try {
+        port.postMessage({ ...message, requestId }, transfer)
+      } catch (error) {
+        pending.delete(requestId)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
     })
   }
   return {
@@ -180,13 +257,36 @@ export function workerFigArchive(
         (response) => response.pageIds,
         (access) => access.componentPages(componentIds)
       ),
-    patch: (patch, input) =>
-      ask(
-        { type: 'patch-archive', patch, input },
+    patch: (patch, input) => {
+      // Keep the reader's worker. Page loads and collab still use it. This write never posts
+      // the NodeChange tree: records are Kiwi bytes, and a failed transfer patches here.
+      const onMainThread = () => fallback().patch(patch, input)
+      if (!schema) return onMainThread()
+      let portable: PortableArchivePatch
+      try {
+        portable = portableArchivePatch(schema, patch, input)
+      } catch (error) {
+        if (!isPortCloneFailure(error)) throw error
+        return onMainThread()
+      }
+      return ask(
+        {
+          type: 'patch-archive',
+          records: portable.records,
+          blobs: portable.blobs,
+          removed: portable.removed,
+          replaceVariables: portable.replaceVariables,
+          input: portable.input
+        },
         'patch-archive-result',
         (response) => response.bytes,
-        (access) => access.patch(patch, input)
-      ),
+        (access) => access.patch(patch, input),
+        portable.transfer
+      ).catch((error: unknown) => {
+        if (!isPortCloneFailure(error)) throw error
+        return onMainThread()
+      })
+    },
     dropWorker: () => void toFallback(),
     close() {
       if (closed) return

@@ -14,7 +14,8 @@ export function resolveLanguageModelID(
   if (
     config.providerID === 'openrouter' ||
     config.providerID === 'openai-compatible' ||
-    config.providerID === 'anthropic-compatible'
+    config.providerID === 'anthropic-compatible' ||
+    config.providerID === 'cursor'
   ) {
     return config.customModelID.trim() || config.modelID
   }

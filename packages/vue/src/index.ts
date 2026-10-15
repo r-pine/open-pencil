@@ -170,7 +170,11 @@ export {
   applySolidStrokeColor,
   applyStrokePaint,
   BUILT_IN_COLOR_FORMATS,
+  eyeDropperActive,
   fromPercent,
+  isEyeDropperSupported,
+  releaseEyeDropperGuard,
+  sampleScreenColor,
   toPercent,
   useColorModel
 } from '#vue/controls/color-model'

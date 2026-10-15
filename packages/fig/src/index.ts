@@ -17,6 +17,8 @@ export {
   type WriteFigArchiveInput
 } from './archive'
 export {
+  decodeFigPatchRecords,
+  encodeFigPatchRecords,
   figArchiveComponentUsePages,
   figArchiveRecordInfo,
   figComponentUsePages,

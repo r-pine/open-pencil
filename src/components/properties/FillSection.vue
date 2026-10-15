@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { ref } from 'vue'
+
 import { shaderOfPaint, type Fill, type SceneNode } from '@open-pencil/scene-graph'
 import { colorToHexRaw } from '@open-pencil/scene-graph/color'
 import type { Color } from '@open-pencil/scene-graph/primitives'
 import {
   BindableValueRoot,
+  eyeDropperActive,
   useColorBindingProvider,
   useFillControls,
   useI18n,
@@ -50,7 +53,10 @@ function onPickerOpenChange(
   binding: BindableValueActions<Color>
 ) {
   gradients.setOpen(gradients.target(nodeIds, 'fills', index), open)
-  if (!open) commitPaintMutation(binding)
+  if (!open) {
+    clearSampledFill(index)
+    commitPaintMutation(binding)
+  }
 }
 const colorProvider = useColorBindingProvider()
 const { panels, common } = useI18n()
@@ -68,16 +74,44 @@ function fillShader(node: SceneNode | null, fill: Fill) {
   return node ? shaderOfPaint(node, fill) : null
 }
 
-function displayFill(fill: Fill, resolvedColor: Color | undefined): Fill {
-  return fill.type === 'SOLID' && resolvedColor ? { ...fill, color: resolvedColor } : fill
+/** Sampled solid colors, by fill index, shown until the picker closes. */
+const sampledFills = ref(new Map<number, Color>())
+
+function clearSampledFill(index: number) {
+  if (!sampledFills.value.has(index)) return
+  const next = new Map(sampledFills.value)
+  next.delete(index)
+  sampledFills.value = next
+}
+
+function displayFill(
+  fill: Fill,
+  resolvedColor: Color | undefined,
+  index: number,
+  bound: boolean
+): Fill {
+  // A successful eyedropper sample replaces the variable color `resolvedValue` still reports
+  // until the binding is cleared. The open swatch and channel fields read this fill.
+  const sample = sampledFills.value.get(index)
+  if (fill.type === 'SOLID' && sample) return { ...fill, color: sample }
+  // Once the binding is overridden, feed the color that was applied (run fill or raw
+  // fill.color). useColorModel refreshes RGB only when this prop changes.
+  if (fill.type === 'SOLID' && bound && resolvedColor) return { ...fill, color: resolvedColor }
+  return fill
 }
 
 function updatePickerFill(
   binding: BindableValueActions<Color>,
   flush: () => void,
+  index: number,
   nextFill: Fill,
   update: (fill: Fill) => void
 ) {
+  if (eyeDropperActive.value && nextFill.type === 'SOLID') {
+    const next = new Map(sampledFills.value)
+    next.set(index, nextFill.color)
+    sampledFills.value = next
+  }
   applyPaintMutation(binding, flush, () => update(nextFill))
 }
 
@@ -154,7 +188,9 @@ function updateSolidColor(
             >
               <template #preview>
                 <FillPicker
-                  :fill="displayFill(fill, binding.resolvedValue)"
+                  :fill="
+                    displayFill(fill, binding.resolvedValue, index, binding.state === 'bound')
+                  "
                   :okhcl="createFillOkhclAdapter(okhcl, activeNode, index)"
                   :shader="fillShader(activeNode, fill)"
                   :keep-open="gradients.pressesHandle"
@@ -163,7 +199,7 @@ function updateSolidColor(
                     gradients.setStop(gradients.target(selectedNodeIds, 'fills', index), $event)
                   "
                   @update="
-                    updatePickerFill(binding.actions, flush, $event, (next) =>
+                    updatePickerFill(binding.actions, flush, index, $event, (next) =>
                       actions.update(index, next)
                     )
                   "

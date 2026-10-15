@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui'
+import type { FocusOutsideEvent, PointerDownOutsideEvent } from 'reka-ui'
 import { computed } from 'vue'
 
 import { colorToCSS } from '@open-pencil/scene-graph/color'
 import type { Color } from '@open-pencil/scene-graph/primitives'
 
+import { eyeDropperActive } from '#vue/controls/color-model/eyedropper'
 import { useRetainedPopup } from '#vue/lifecycle/retention/popup'
 
 export interface ColorPickerUI {
@@ -35,13 +37,30 @@ const { open: popupOpen, portalActive } = useRetainedPopup(undefined, () => {
 })
 
 function cancelFromEscape(event: KeyboardEvent) {
+  if (eyeDropperActive.value) {
+    event.preventDefault()
+    return
+  }
   event.stopPropagation()
   emit('cancel')
+}
+
+function retainWhileEyedropping(event: PointerDownOutsideEvent | FocusOutsideEvent) {
+  if (eyeDropperActive.value) event.preventDefault()
+}
+
+/** Last line of defense: DismissableLayer can still race the EyeDropper click past preventDefault. */
+function onOpenChange(open: boolean) {
+  if (!open && eyeDropperActive.value) {
+    popupOpen.value = true
+    return
+  }
+  emit('openChange', open)
 }
 </script>
 
 <template>
-  <PopoverRoot v-model:open="popupOpen" @update:open="emit('openChange', $event)">
+  <PopoverRoot v-model:open="popupOpen" @update:open="onOpenChange">
     <PopoverTrigger as-child>
       <slot name="trigger" :style="{ background: swatchBg }">
         <button
@@ -60,6 +79,9 @@ function cancelFromEscape(event: KeyboardEvent) {
         side="left"
         data-picker-content
         @escape-key-down="cancelFromEscape"
+        @pointer-down-outside="retainWhileEyedropping"
+        @focus-outside="retainWhileEyedropping"
+        @interact-outside="retainWhileEyedropping"
       >
         <slot :color="color" />
       </PopoverContent>

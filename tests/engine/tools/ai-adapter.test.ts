@@ -237,6 +237,54 @@ describe('AI adapter', () => {
     expect(result.type).toBe('FRAME')
   })
 
+  test('get_node accepts the id spellings a model sends with depth', async () => {
+    const { tools, figma } = setup()
+    const text = figma.createText()
+    text.name = 'Status'
+    text.characters = 'Готово'
+    const getNode = tools.get_node as SDKTool & {
+      inputSchema: {
+        '~standard': {
+          validate: (value: unknown) => Promise<{ value?: Record<string, unknown>; issues?: unknown }>
+        }
+      }
+    }
+
+    // The AI SDK treats a Standard Schema result that still has `value` as success. Valibot's
+    // failure value drops unknown keys, so `{ nodeId, depth }` used to reach get_node as
+    // `{ depth }` and report: Expected "id" but received undefined → at id.
+    async function argsAsAISdk(payload: Record<string, unknown>) {
+      const result = await getNode.inputSchema['~standard'].validate(payload)
+      expect(result.value).toBeDefined()
+      return result.value ?? {}
+    }
+
+    for (const payload of [
+      { nodeId: text.id, depth: 0 },
+      { node_id: text.id, depth: 1 },
+      { ID: text.id, depth: 0 },
+      { id: text.id, depth: 0 }
+    ]) {
+      const args = await argsAsAISdk(payload)
+      const result = (await getNode.execute(args, { toolCallId: 'get_node-call' })) as {
+        id?: string
+        name?: string
+        error?: string
+      }
+      expect(result.error).toBeUndefined()
+      expect(result.id).toBe(text.id)
+      expect(result.name).toBe('Status')
+    }
+  })
+
+  test('get_node still errors when the call names no node', async () => {
+    const { tools } = setup()
+    const result = (await adapterTool(tools, 'get_node').execute({ depth: 0 })) as { error: string }
+    expect(result.error).toBe(
+      'Invalid arguments for get_node:\n× Invalid key: Expected "id" but received undefined\n  → at id'
+    )
+  })
+
   test('delete + get returns error for removed node', async () => {
     const { tools, figma } = setup()
     const rect = figma.createRectangle()

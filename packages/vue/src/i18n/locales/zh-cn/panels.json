@@ -488,6 +488,8 @@
   "lightness": "明度",
   "chroma": "色度",
   "alpha": "透明度",
+  "eyedropper": "吸管",
+  "eyedropperUnsupported": "吸管工具需要桌面版 Chrome 或 Edge",
   "individualPadding": "独立内边距",
   "strokeSettings": "描边设置",
   "strokeDashLength": "虚线",

@@ -1,0 +1,15 @@
+# Local MinIO image — official minio/minio registry pulls are restricted on this host,
+# so we bake the GitHub release binary into alpine.
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates curl wget \
+  && adduser -D -u 1000 -h /home/minio minio
+
+COPY .minio-bin/minio /usr/bin/minio
+COPY .minio-bin/mc /usr/bin/mc
+RUN chmod 755 /usr/bin/minio /usr/bin/mc
+
+USER minio
+EXPOSE 9000 9001
+ENTRYPOINT ["/usr/bin/minio"]
+CMD ["server", "/data", "--address", ":9000", "--console-address", ":9001"]

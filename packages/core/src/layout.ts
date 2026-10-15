@@ -41,6 +41,8 @@ import {
   type SceneNode
 } from '@open-pencil/scene-graph'
 
+import { MAIN_THREAD_SLICE_MS, nowMs, yieldToMainThread } from '#core/editor/main-thread'
+
 import { estimateTextSize, getTextMeasurer } from './layout/text-measurement'
 import {
   applyMinMaxConstraints,
@@ -92,6 +94,160 @@ export function computeAllLayouts(graph: SceneGraph, scopeId?: string): void {
       computeLayoutsBottomUp(graph, rootId, new Set())
     }
   })
+}
+
+/**
+ * Nodes visited in one turn while ordering or laying out. A clock check alone is not enough:
+ * one component-library page is ~100k layers, and a stuck timestamp would otherwise run the
+ * whole page before the tab can take a click. A frame with a wide child list is its own turn.
+ */
+const COOPERATIVE_LAYOUT_NODES = 250
+const HEAVY_LAYOUT_CHILDREN = 60
+
+/**
+ * Same bottom-up layout as `computeAllLayouts`, but each turn stays short enough that the tab
+ * can take a click. Used when the page being laid out is not the one on screen, or is large
+ * enough that one synchronous pass would freeze the tab. False when `shouldContinue` fails.
+ */
+export async function computeAllLayoutsCooperatively(
+  graph: SceneGraph,
+  scopeId?: string,
+  shouldContinue: () => boolean = () => true
+): Promise<boolean> {
+  const rootId = scopeId ?? graph.rootId
+  const order = await collectLayoutOrder(graph, rootId, shouldContinue)
+  if (!order) return false
+  let index = 0
+  const layOutSlice = () => {
+    const started = nowMs()
+    let visited = 0
+    graph.applyDerivedLayoutDuring(() => {
+      while (
+        index < order.length &&
+        visited < COOPERATIVE_LAYOUT_NODES &&
+        nowMs() - started < MAIN_THREAD_SLICE_MS
+      ) {
+        const nodeId = order[index]
+        const node = nodeId ? graph.getNode(nodeId) : undefined
+        index++
+        visited++
+        if (!node || node.layoutMode === 'NONE' || preservesImportedInstanceLayout(node)) continue
+        // A wide frame lays out every direct child in this call. Start it on a fresh turn
+        // when this slice has already done other work, and do not pack another frame after it.
+        const heavy = node.childIds.length > HEAVY_LAYOUT_CHILDREN
+        if (heavy && visited > 1) {
+          index--
+          break
+        }
+        computeLayout(graph, node.id)
+        if (heavy) break
+      }
+    })
+  }
+  while (index < order.length) {
+    if (!shouldContinue()) return false
+    layOutSlice()
+    if (index < order.length) await yieldToMainThread()
+  }
+  if (!shouldContinue()) return false
+  const again = await applyGeneratedTextIfNeeded(graph, rootId, order, shouldContinue)
+  if (again === null || !again) return again === false && shouldContinue()
+  index = 0
+  while (index < order.length) {
+    if (!shouldContinue()) return false
+    layOutSlice()
+    if (index < order.length) await yieldToMainThread()
+  }
+  return shouldContinue()
+}
+
+/**
+ * `applyEffectiveGeneratedTextLayout` walks the whole page in one turn. Fig text never takes
+ * that path; scanning for anything else yields, and the full walk runs only when it has to,
+ * on its own turn.
+ */
+async function applyGeneratedTextIfNeeded(
+  graph: SceneGraph,
+  rootId: string,
+  order: readonly string[],
+  shouldContinue: () => boolean
+): Promise<boolean | null> {
+  if (!getTextMeasurer()) return false
+  let needed = false
+  for (let index = 0; index < order.length; index++) {
+    const id = order[index]
+    const node = id ? graph.getNode(id) : undefined
+    if (
+      node?.type === 'TEXT' &&
+      node.source.format !== 'fig' &&
+      node.componentId &&
+      node.derivedLayout
+    ) {
+      needed = true
+      break
+    }
+    if ((index + 1) % COOPERATIVE_LAYOUT_NODES === 0) {
+      if (!shouldContinue()) return null
+      await yieldToMainThread()
+      if (!shouldContinue()) return null
+    }
+  }
+  if (!needed) return false
+  if (!shouldContinue()) return null
+  await yieldToMainThread()
+  if (!shouldContinue()) return null
+  let again = false
+  graph.applyDerivedLayoutDuring(() => {
+    graph.withLayoutMutations(() => {
+      again = applyEffectiveGeneratedTextLayout(graph, rootId)
+    })
+  })
+  return again
+}
+
+async function collectLayoutOrder(
+  graph: SceneGraph,
+  rootId: string,
+  shouldContinue: () => boolean
+): Promise<string[] | null> {
+  const order: string[] = []
+  const visited = new Set<string>()
+  const stack: Array<{ id: string; expanded: boolean }> = [{ id: rootId, expanded: false }]
+  let scanned = 0
+  while (stack.length > 0) {
+    const entry = stack.pop()
+    if (!entry) break
+    if (!entry.expanded) {
+      if (visited.has(entry.id)) continue
+      const node = graph.getNode(entry.id)
+      if (!node) continue
+      visited.add(entry.id)
+      stack.push({ id: entry.id, expanded: true })
+      for (let index = node.childIds.length - 1; index >= 0; index--) {
+        const childId = node.childIds[index]
+        if (childId) stack.push({ id: childId, expanded: false })
+        // One frame on a component page can list every variant. Pushing that list is its own
+        // turn, otherwise the walk never reaches the yield below it.
+        if (
+          node.childIds.length > COOPERATIVE_LAYOUT_NODES &&
+          index % COOPERATIVE_LAYOUT_NODES === 0
+        ) {
+          if (!shouldContinue()) return null
+          await yieldToMainThread()
+          if (!shouldContinue()) return null
+        }
+      }
+    } else {
+      order.push(entry.id)
+    }
+    scanned++
+    if (scanned % COOPERATIVE_LAYOUT_NODES === 0) {
+      if (!shouldContinue()) return null
+      await yieldToMainThread()
+      if (!shouldContinue()) return null
+    }
+  }
+  return order
 }
 
 /**

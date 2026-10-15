@@ -46,10 +46,25 @@ function removeSession(session: RoomSession) {
 }
 
 /** Puts a tab's document into a new room, or returns the room it is already in. */
-export function shareDocument(store: EditorStore, roomId = generateRoomId()): RoomSession {
+export function shareDocument(
+  store: EditorStore,
+  roomId = generateRoomId(),
+  options?: { archiveBytes?: number }
+): RoomSession {
   const existing = roomForStore(store)
   if (existing) return existing
-  const session = openRoomSession({ roomId, store, origin: 'shared' })
+  const alreadyOpen = roomById(roomId)
+  if (alreadyOpen) {
+    const tab = getTabForStore(alreadyOpen.store)
+    if (tab) switchTab(tab.id)
+    return alreadyOpen
+  }
+  const session = openRoomSession({
+    roomId,
+    store,
+    origin: 'shared',
+    archiveBytes: options?.archiveBytes
+  })
   addSession(session)
   session.shareDocument()
   return session

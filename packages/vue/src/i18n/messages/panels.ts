@@ -590,7 +590,9 @@ export const panelMessageDefaults = {
   brightness: 'Brightness',
   lightness: 'Lightness',
   chroma: 'Chroma',
-  alpha: 'Alpha'
+  alpha: 'Alpha',
+  eyedropper: 'Eyedropper',
+  eyedropperUnsupported: 'Eyedropper needs Chrome or Edge on desktop'
 } as const
 
 export const panelMessages = i18n('panels', panelMessageDefaults)

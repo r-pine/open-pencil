@@ -488,6 +488,8 @@
   "lightness": "明度",
   "chroma": "彩度",
   "alpha": "アルファ",
+  "eyedropper": "スポイト",
+  "eyedropperUnsupported": "スポイトはデスクトップの Chrome または Edge が必要です",
   "individualPadding": "個別のパディング",
   "strokeSettings": "線の設定",
   "strokeDashLength": "破線の長さ",

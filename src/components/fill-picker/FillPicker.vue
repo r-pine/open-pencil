@@ -7,6 +7,7 @@ import type { Fill, ShaderPaint, ShaderPreset } from '@open-pencil/scene-graph'
 import {
   applySolidFillColor,
   DEFAULT_SHADER_PRESET,
+  eyeDropperActive,
   FillRoot,
   useI18n,
   useRetainedPopup
@@ -63,24 +64,45 @@ const { panels } = useI18n()
 
 /** Dragging a gradient handle on the canvas leaves the picker open, as in Figma. */
 function keepOpenOnPress(event: PointerDownOutsideEvent) {
-  if (keepOpen?.(event.detail.originalEvent)) event.preventDefault()
+  if (eyeDropperActive.value || keepOpen?.(event.detail.originalEvent)) event.preventDefault()
 }
 
 /** A press focuses the canvas before the press itself reaches the picker, so the press decides. */
 function keepOpenOnFocus(event: FocusOutsideEvent) {
+  if (eyeDropperActive.value) {
+    event.preventDefault()
+    return
+  }
   if (keepOpen && event.detail.originalEvent.target instanceof HTMLCanvasElement)
     event.preventDefault()
 }
 
+function keepOpenWhileEyedropping(event: PointerDownOutsideEvent | FocusOutsideEvent) {
+  if (eyeDropperActive.value) event.preventDefault()
+}
+
 function cancelFromEscape(event: KeyboardEvent) {
+  if (eyeDropperActive.value) {
+    event.preventDefault()
+    return
+  }
   event.stopPropagation()
   emit('cancel')
+}
+
+/** Last line of defense: DismissableLayer can still race the EyeDropper click past preventDefault. */
+function onOpenChange(open: boolean) {
+  if (!open && eyeDropperActive.value) {
+    popupOpen.value = true
+    return
+  }
+  emit('openChange', open)
 }
 </script>
 
 <template>
   <FillRoot :fill="fill" @update="emit('update', $event)" v-slot="root">
-    <PopoverRoot v-model:open="popupOpen" @update:open="emit('openChange', $event)">
+    <PopoverRoot v-model:open="popupOpen" @update:open="onOpenChange">
       <PopoverTrigger as-child>
         <button
           type="button"
@@ -106,6 +128,7 @@ function cancelFromEscape(event: KeyboardEvent) {
           @escape-key-down="cancelFromEscape"
           @pointer-down-outside="keepOpenOnPress"
           @focus-outside="keepOpenOnFocus"
+          @interact-outside="keepOpenWhileEyedropping"
         >
           <div class="mb-2 flex items-center gap-0.5">
             <Tip :label="panels.solid">

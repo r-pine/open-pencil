@@ -5,6 +5,7 @@ import * as Y from 'yjs'
 
 import { joinCollabRoom, type JoinCollabRoom } from '@/app/collab/transport'
 import type { CollabAction } from '@/app/collab/transport/types'
+import { SYNC_ALL_NODES_SYNC_LIMIT } from '@/app/collab/yjs-sync'
 import { MAX_COLLAB_MESSAGE_BYTES } from '@/constants'
 
 export type CollabRoomOptions = {
@@ -15,6 +16,16 @@ export type CollabRoomOptions = {
   joinRoom?: JoinCollabRoom
   /** The most a peer's update may decode to; `MAX_COLLAB_MESSAGE_BYTES` unless a test lowers it. */
   maxMessageBytes?: number
+  /**
+   * Sends a large room as the updates already stored, one record at a time.
+   * `Y.encodeStateAsUpdate` would put every layer into one buffer.
+   */
+  replayStoredUpdates?: (send: (update: Uint8Array, peerId: string) => void, peerId: string) => void
+  /**
+   * False drops the update before it is applied. A historical full document must not be
+   * replayed in one transaction onto a file this tab already opened.
+   */
+  acceptRemoteUpdate?: (update: Uint8Array) => boolean
 }
 
 export type CollabRoomConnection = {
@@ -95,6 +106,19 @@ function applyRemote(
   }
 }
 
+/** A stored room record: an uncompressed Yjs update, not a deflated V2 reply. */
+function applyPlainUpdate(ydoc: Y.Doc, data: Uint8Array, limit: number, peerId: string): void {
+  if (data.length > limit) {
+    console.warn(`[Collab] Dropped an update from peer ${peerId} past ${limit} bytes`)
+    return
+  }
+  try {
+    Y.applyUpdate(ydoc, data, 'remote')
+  } catch {
+    return
+  }
+}
+
 function awarenessEntries(data: Uint8Array): AwarenessEntry[] {
   try {
     const decoder = decoding.createDecoder(data)
@@ -117,7 +141,9 @@ export function connectCollabRoom({
   awareness,
   updatePeersList,
   joinRoom = joinCollabRoom,
-  maxMessageBytes = MAX_COLLAB_MESSAGE_BYTES
+  maxMessageBytes = MAX_COLLAB_MESSAGE_BYTES,
+  replayStoredUpdates,
+  acceptRemoteUpdate
 }: CollabRoomOptions): CollabRoomConnection {
   const room = joinRoom(roomId)
   const [sendYjsUpdate, getUpdate] = room.makeAction('yjs-update')
@@ -131,6 +157,7 @@ export function connectCollabRoom({
   const awarenessClientsByPeer = new Map<string, Set<number>>()
 
   getUpdate((data, peerId) => {
+    if (acceptRemoteUpdate && !acceptRemoteUpdate(data)) return
     applyRemote(ydoc, data, { limit: maxMessageBytes, peerId })
   })
 
@@ -146,11 +173,18 @@ export function connectCollabRoom({
   })
 
   getSyncStep1((stateVector, peerId) => {
+    if (ydoc.getMap('nodes').size > SYNC_ALL_NODES_SYNC_LIMIT) {
+      replayStoredUpdates?.(sendSyncReply, peerId)
+      return
+    }
     sendSyncReply(encodeSyncReply(ydoc, stateVector), peerId)
   })
 
   getSyncReply((data, peerId) => {
-    applyRemote(ydoc, data, { limit: maxMessageBytes, peerId, compressed: true })
+    if (acceptRemoteUpdate && !acceptRemoteUpdate(data)) return
+    // A normal reply is deflated V2. Replayed room records are plain Yjs updates.
+    if (applyRemote(ydoc, data, { limit: maxMessageBytes, peerId, compressed: true })) return
+    applyPlainUpdate(ydoc, data, maxMessageBytes, peerId)
   })
 
   ydoc.on('updateV2', (update: Uint8Array, origin: unknown) => {

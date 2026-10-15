@@ -13,9 +13,13 @@ import {
   createFigPopulationWorker
 } from '#core/kiwi/fig/population/client'
 import { isReaderPagePending, recoverReaderPage } from '#core/kiwi/fig/session/document-state'
-import { computeAllLayouts } from '#core/layout'
+import { yieldToMainThread } from '#core/editor/main-thread'
+import { computeAllLayouts, computeAllLayoutsCooperatively } from '#core/layout'
 import { fontManager } from '#core/text/fonts'
-import { collectGraphFontRequirements } from '#core/text/requirements'
+import {
+  collectGraphFontRequirements,
+  collectGraphFontRequirementsCooperatively
+} from '#core/text/requirements'
 import { missingGraphFontScripts } from '#core/text/resolved-requirements'
 
 import { createPageViewportStore } from './page-viewports'
@@ -50,6 +54,23 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 const MAX_CONCURRENT_FONT_LOADS = 4
+/** Above this, font scans and layout return to the event loop. Smaller pages stay synchronous. */
+const COOPERATIVE_PAGE_NODES = 1_500
+
+function pageExceeds(graph: SceneGraph, pageId: string, limit: number): boolean {
+  let count = 0
+  const stack = [pageId]
+  while (stack.length > 0) {
+    const id = stack.pop()
+    if (!id) continue
+    const node = graph.getNode(id)
+    if (!node) continue
+    count++
+    if (count > limit) return true
+    for (const childId of node.childIds) stack.push(childId)
+  }
+  return false
+}
 /** What preparing a page needs drawn once it is laid out, such as its shaders' frames. */
 interface PageDrawing {
   drawPageShaderFrames(
@@ -97,6 +118,10 @@ export function createPageActions(ctx: EditorContext, drawing?: PageDrawing) {
   // Off-screen preparations per document, shared by concurrent callers and kept once they
   // succeed. Later edits lay out their own scope, as they do on the page on screen.
   const offscreenPreparations = new WeakMap<SceneGraph, Map<string, Promise<boolean>>>()
+  // The component-library pass queued by the latest page switch, before it starts. A second
+  // switch replaces it so two switches do not each lay the library out from scratch.
+  let referencedSetsTimer: ReturnType<typeof setTimeout> | undefined
+  let referencedSetsFrame: number | undefined
 
   function populationWorker() {
     if (!canUseFigPopulationWorker(ctx.graph)) return null
@@ -133,11 +158,22 @@ export function createPageActions(ctx: EditorContext, drawing?: PageDrawing) {
   async function resolvePageFonts(
     pageId: string,
     pageName: string,
-    options: PreparePageOptions
-  ): Promise<void> {
+    options: PreparePageOptions,
+    shouldContinue: () => boolean = () => true,
+    cooperative = false
+  ): Promise<boolean> {
     const childIds = ctx.graph.getChildren(pageId).map((node) => node.id)
-    const toLoad = fontManager.collectFontKeys(ctx.graph, childIds)
-    const requirements = collectGraphFontRequirements(ctx.graph, childIds)
+    // Off-screen pages always scan cooperatively. `pageExceeds` itself stops early, but the
+    // synchronous font walk that follows it is the whole component library in one turn.
+    const large = cooperative || pageExceeds(ctx.graph, pageId, COOPERATIVE_PAGE_NODES)
+    const requirements = large
+      ? await collectGraphFontRequirementsCooperatively(ctx.graph, childIds, shouldContinue)
+      : {
+          ...collectGraphFontRequirements(ctx.graph, childIds),
+          fontKeys: fontManager.collectFontKeys(ctx.graph, childIds)
+        }
+    if (!requirements || !shouldContinue()) return false
+    const toLoad = requirements.fontKeys
     options.onProgress?.({
       phase: 'resolving-fonts',
       detail: pageName,
@@ -186,8 +222,19 @@ export function createPageActions(ctx: EditorContext, drawing?: PageDrawing) {
         (script) => (fallbacks[script]?.length ?? 0) > 0
       )
       if (facesReady && fallbacksReady) {
-        for (const node of requirements.nodes) if (node.type === 'TEXT') node.textPicture = null
+        for (let index = 0; index < requirements.nodes.length; index++) {
+          const node = requirements.nodes[index]
+          if (node?.type === 'TEXT') node.textPicture = null
+          // A count bound, not only a clock: clearing every text picture on a library page
+          // is one turn otherwise, and a stalled timestamp would never come back to input.
+          if (large && index > 0 && index % 400 === 0) {
+            if (!shouldContinue()) return false
+            await yieldToMainThread()
+            if (!shouldContinue()) return false
+          }
+        }
       }
+      return shouldContinue()
     } finally {
       fontManager.unblockNodes(childIds)
       ctx.getRenderer()?.invalidateAllPictures()
@@ -201,38 +248,163 @@ export function createPageActions(ctx: EditorContext, drawing?: PageDrawing) {
     const page = ctx.graph.getNode(pageId)
     if (page?.type !== 'CANVAS') return null
     const generation = ++pageSwitchGeneration
+    // Drop a component-library pass that has not started, so this switch can commit and take
+    // clicks before that library is laid out. A pass already running yields between slices.
+    cancelScheduledReferencedSets()
     throwIfAborted(options.signal)
 
     options.onProgress?.({ phase: 'populating-page', detail: page.name })
     const populated = await populatePage(pageId, generation, options.signal)
     if (populated === null || generation !== pageSwitchGeneration) return null
-    // A file brings in only the variants a page uses; switching a variant, in the panel or in
-    // preview, needs the rest of its set, laid out with its fonts, so the pages holding those
-    // sets are prepared with this one, and the pages of sets their variants use in turn.
+    // Variant sets live on other pages. Their layers have to be loaded before this page can
+    // paint an instance, but laying out every set first freezes a large file: aska-app pulls
+    // in its whole component library. Fonts and layout of those pages run after the first paint,
+    // and the walk that finds them yields so a 100k-layer page cannot freeze the tab.
     const seen = new Set([pageId])
-    const pending = componentSetPages(ctx.graph, pageId)
+    const referencedSets: string[] = []
+    const visibleIsLarge = pageExceeds(ctx.graph, pageId, COOPERATIVE_PAGE_NODES)
+    const pending = visibleIsLarge
+      ? await collectComponentSetPages(pageId, generation)
+      : componentSetPages(ctx.graph, pageId)
+    if (!pending) return null
     for (let setPageId = pending.shift(); setPageId !== undefined; setPageId = pending.shift()) {
+      if (generation !== pageSwitchGeneration) return null
       if (seen.has(setPageId)) continue
       seen.add(setPageId)
-      const ready = await preparePageNodes(setPageId)
+      referencedSets.push(setPageId)
+      const populatedSet = await populatePage(setPageId, generation, options.signal)
       throwIfAborted(options.signal)
-      if (!ready || generation !== pageSwitchGeneration) return null
-      pending.push(...componentSetPages(ctx.graph, setPageId))
+      if (populatedSet === null || generation !== pageSwitchGeneration) return null
+      const nested = pageExceeds(ctx.graph, setPageId, COOPERATIVE_PAGE_NODES)
+        ? await collectComponentSetPages(setPageId, generation)
+        : componentSetPages(ctx.graph, setPageId)
+      if (!nested) return null
+      pending.push(...nested)
     }
 
-    await resolvePageFonts(pageId, page.name, options)
+    const fontsReady = await resolvePageFonts(pageId, page.name, options, () => {
+      return generation === pageSwitchGeneration
+    })
+    if (!fontsReady) return null
     throwIfAborted(options.signal)
     if (generation !== pageSwitchGeneration) return null
     if (ctx.getRenderer() || populated) {
       options.onProgress?.({ phase: 'layout', detail: page.name })
-      ctx.graph.applyDerivedLayoutDuring(() => computeAllLayouts(ctx.graph, pageId))
+      if (visibleIsLarge) {
+        const laidOut = await layoutPage(pageId, generation)
+        if (!laidOut) return null
+      } else {
+        ctx.graph.applyDerivedLayoutDuring(() => computeAllLayouts(ctx.graph, pageId))
+      }
     }
     throwIfAborted(options.signal)
     if (generation !== pageSwitchGeneration) return null
     // Frames are drawn at the size layout gives each layer.
     await drawing?.drawPageShaderFrames(pageId, options)
     throwIfAborted(options.signal)
-    return generation === pageSwitchGeneration ? { pageId, generation } : null
+    if (generation !== pageSwitchGeneration) return null
+    scheduleReferencedSets(referencedSets, generation)
+    return { pageId, generation }
+  }
+
+  /**
+   * Pages holding component sets used by instances under `pageId`. Yields during the walk: a
+   * component library is the whole file, and scanning it in one turn freezes the tab.
+   */
+  async function collectComponentSetPages(
+    pageId: string,
+    generation: number | null
+  ): Promise<string[] | null> {
+    const pages = new Set<string>()
+    const stack = [...(ctx.graph.getNode(pageId)?.childIds ?? [])].reverse()
+    let scanned = 0
+    while (stack.length > 0) {
+      if (generation !== null && generation !== pageSwitchGeneration) return null
+      const id = stack.pop()
+      if (!id) continue
+      const node = ctx.graph.getNode(id)
+      if (!node) continue
+      scanned++
+      if (node.type === 'INSTANCE') {
+        const component = instanceMainComponent(ctx.graph, node)
+        const set = component?.parentId ? ctx.graph.getNode(component.parentId) : undefined
+        const setPageId = set?.type === 'COMPONENT_SET' ? ctx.graph.pageOf(set.id) : null
+        const setPage = setPageId ? ctx.graph.getNode(setPageId) : undefined
+        if (setPage && setPage.id !== pageId && !setPage.internalOnly) pages.add(setPage.id)
+      }
+      for (let index = node.childIds.length - 1; index >= 0; index--) {
+        const childId = node.childIds[index]
+        if (childId) stack.push(childId)
+        if (node.childIds.length > 500 && index % 500 === 0) {
+          if (generation !== null && generation !== pageSwitchGeneration) return null
+          await yieldToMainThread()
+        }
+      }
+      if (scanned % 500 === 0) await yieldToMainThread()
+    }
+    return [...pages]
+  }
+
+  async function layoutPage(pageId: string, generation: number | null): Promise<boolean> {
+    return computeAllLayoutsCooperatively(
+      ctx.graph,
+      pageId,
+      () => generation === null || generation === pageSwitchGeneration
+    )
+  }
+
+  /**
+   * Lays out component-set pages after the page on screen can paint. A newer page switch
+   * abandons the walk. Each page's fonts and layout yield, so one library page cannot freeze
+   * the tab.
+   */
+  function cancelScheduledReferencedSets() {
+    if (referencedSetsTimer !== undefined) {
+      clearTimeout(referencedSetsTimer)
+      referencedSetsTimer = undefined
+    }
+    if (referencedSetsFrame !== undefined && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(referencedSetsFrame)
+      referencedSetsFrame = undefined
+    }
+  }
+
+  function scheduleReferencedSets(pageIds: readonly string[], generation: number) {
+    if (pageIds.length === 0) return
+    // Replace a pass that has not started. Two page switches would otherwise each run the
+    // component library as its own long task, and the second click never reaches the page.
+    cancelScheduledReferencedSets()
+    const run = () => {
+      referencedSetsTimer = undefined
+      if (generation !== pageSwitchGeneration) return
+      void prepareReferencedSets(pageIds, generation).catch((error: unknown) => {
+        console.warn('Could not prepare component pages in the background', error)
+      })
+    }
+    const arm = () => {
+      referencedSetsFrame = undefined
+      if (generation !== pageSwitchGeneration) return
+      referencedSetsTimer = setTimeout(run, 0)
+    }
+    if (typeof requestAnimationFrame === 'function') referencedSetsFrame = requestAnimationFrame(arm)
+    else arm()
+  }
+
+  async function prepareReferencedSets(pageIds: readonly string[], generation: number) {
+    const seen = new Set<string>([ctx.state.currentPageId])
+    const pending = [...pageIds]
+    for (let setPageId = pending.shift(); setPageId !== undefined; setPageId = pending.shift()) {
+      if (generation !== pageSwitchGeneration) return
+      if (seen.has(setPageId)) continue
+      seen.add(setPageId)
+      const ready = await preparePageNodes(setPageId)
+      if (!ready || generation !== pageSwitchGeneration) return
+      const nested = await collectComponentSetPages(setPageId, generation)
+      if (!nested || generation !== pageSwitchGeneration) return
+      pending.push(...nested)
+      await yieldToMainThread()
+    }
+    if (generation === pageSwitchGeneration) ctx.requestRender()
   }
 
   function commitPageSwitch(prepared: PreparedPage): boolean {
@@ -264,10 +436,20 @@ export function createPageActions(ctx: EditorContext, drawing?: PageDrawing) {
   async function prepareOffscreenPage(graph: SceneGraph, page: SceneNode): Promise<boolean> {
     const populated = await populatePage(page.id, null)
     if (populated === null || graph !== ctx.graph) return false
-    await resolvePageFonts(page.id, page.name, {})
+    const fontsReady = await resolvePageFonts(
+      page.id,
+      page.name,
+      {},
+      () => graph === ctx.graph,
+      true
+    )
+    if (!fontsReady || graph !== ctx.graph) return false
+    // Fonts and layout are separate turns. A component-set page never runs `computeAllLayouts`
+    // as one chunk: the page on screen has already been asked to commit, and this yields
+    // between bounded slices so that page can take a click.
+    await yieldToMainThread()
     if (graph !== ctx.graph) return false
-    graph.applyDerivedLayoutDuring(() => computeAllLayouts(graph, page.id))
-    return true
+    return computeAllLayoutsCooperatively(graph, page.id, () => graph === ctx.graph)
   }
 
   /**
@@ -318,6 +500,7 @@ export function createPageActions(ctx: EditorContext, drawing?: PageDrawing) {
   }
 
   function clearPageViewports() {
+    cancelScheduledReferencedSets()
     populationWorkerGeneration++
     pageSwitchGeneration++
     populationWorkerInstance?.terminate()

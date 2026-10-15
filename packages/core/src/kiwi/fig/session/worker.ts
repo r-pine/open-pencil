@@ -1,3 +1,5 @@
+import { decodeFigPatchRecords } from '@open-pencil/fig'
+
 import { serializeSceneGraph } from '#core/kiwi/fig/parse/transfer'
 import { createFigArchiveOperations } from '#core/kiwi/fig/session/archive'
 import type {
@@ -10,6 +12,22 @@ import { openReaderSession } from '#core/kiwi/fig/session/reader'
 let session: ReturnType<typeof openReaderSession> | undefined
 let archive: ReturnType<typeof createFigArchiveOperations> | undefined
 let port: MessagePort | undefined
+/** Archive schema, kept after the reader session is retired so a later save can decode a patch. */
+let patchSchema: Uint8Array | undefined
+
+/** A view of its own buffer, so postMessage can transfer the file without cloning spare capacity. */
+function exactTransferBytes(bytes: Uint8Array): Uint8Array {
+  if (
+    bytes.byteOffset === 0 &&
+    bytes.byteLength === bytes.buffer.byteLength &&
+    bytes.buffer instanceof ArrayBuffer
+  ) {
+    return bytes
+  }
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy
+}
 
 function respond(message: FigSessionResponse): void {
   port?.postMessage(message)
@@ -44,7 +62,19 @@ function answerArchiveRequest(request: ArchiveRequest): void {
       const pageIds = archive.componentPages(request.componentIds)
       respond({ type: 'component-pages-result', requestId, pageIds })
     } else {
-      const bytes = archive.patch(request.patch, request.input)
+      if (!patchSchema) throw new Error('FIG session has no archive schema')
+      const records = decodeFigPatchRecords(patchSchema, request.records)
+      const bytes = exactTransferBytes(
+        archive.patch(
+          {
+            records,
+            blobs: request.blobs,
+            removed: request.removed,
+            replaceVariables: request.replaceVariables
+          },
+          request.input
+        )
+      )
       port?.postMessage({ type: 'patch-archive-result', requestId, bytes }, [bytes.buffer])
     }
   } catch (error) {
@@ -70,6 +100,7 @@ function handleRequest(request: FigSessionRequest): void {
     if (request.type === 'dispose') {
       session = undefined
       archive = undefined
+      patchSchema = undefined
       respond({ type: 'disposed' })
       port?.close()
       port = undefined
@@ -98,9 +129,12 @@ self.onmessage = (event: MessageEvent<FigSessionOpenRequest>) => {
   port.start()
   // The worker copies the archive itself, so the main thread sends the file once.
   const archiveBytes = request.buffer.slice(0)
+  patchSchema = undefined
   try {
     const opened = openReaderSession(request.buffer, request.options?.populate)
     const archiveInfo = opened.session.archiveRecordInfo()
+    const schema = opened.graph.figSchemaDeflated
+    patchSchema = schema ? Uint8Array.from(schema) : undefined
     archive = createFigArchiveOperations(archiveBytes, () => archiveInfo)
     respond({ type: 'page-manifest', pages: opened.pages })
     session =

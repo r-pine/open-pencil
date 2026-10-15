@@ -5,17 +5,36 @@ import * as Y from 'yjs'
 import { TestConnector, type TestYInstance } from 'yjs/testHelper'
 
 import type { Fill, GeometryPath, SceneNode } from '@open-pencil/scene-graph'
-import { SceneGraph } from '@open-pencil/scene-graph'
+import { getInstanceOverride, SceneGraph, setInstanceOverride } from '@open-pencil/scene-graph'
 import { nodeVisualBounds } from '@open-pencil/scene-graph/geometry'
 import { createDefaultSourceMetadata } from '@open-pencil/scene-graph/node-defaults'
 
 import { decodeNodeFromYjs, syncEncodedNodeToYMap } from '@/app/collab/node-codec'
+import { settleRoomImages } from '@/app/collab/room/image-sync'
+import { createMemoryRoomImages } from '@/app/collab/room/images'
+import { createLocalEdit } from '@/app/collab/shared-tree/sync'
+import {
+  REMOTE_DUMP_UPDATE_BYTES,
+  remoteUpdateIsHistoricalDump,
+  SYNC_ALL_NODES_SYNC_LIMIT
+} from '@/app/collab/yjs-sync'
 
 import { expectDefined, getNodeOrThrow } from '#tests/helpers/assert'
 import { withSyncedStores } from '#tests/helpers/collab/synced-stores'
 
 function firstPage(graph: SceneGraph): SceneNode {
   return expectDefined(graph.getPages()[0], 'first page')
+}
+
+/** Two calls build the same ids, as two tabs that opened one .fig do. */
+function documentWithLayers(extra: number): SceneGraph {
+  let next = 0
+  const graph = new SceneGraph(() => `doc-${next++}`)
+  const pageId = firstPage(graph).id
+  for (let index = 0; index < extra; index++) {
+    graph.createNode('RECTANGLE', pageId, { id: `layer-${index}`, x: 0, name: `Layer ${index}` })
+  }
+  return graph
 }
 
 describe('collab yjs-sync', () => {
@@ -156,31 +175,88 @@ describe('collab yjs-sync', () => {
     expect(props.strokeGeometry).toEqual([])
   })
 
-  test('binary geometry fields round-trip as Uint8Array, not strings', () => {
+  test('geometry blobs stay on the local graph and out of the room', () => {
     const host = new SceneGraph()
     const page = firstPage(host)
-    const blob = new Uint8Array([1, 2, 3, 250])
+    const blob = new Uint8Array(64 * 1024)
+    blob[0] = 1
     const geometry: GeometryPath[] = [{ windingRule: 'NONZERO', commandsBlob: blob }]
     const ellipse = host.createNode('ELLIPSE', page.id, {
       width: 100,
       height: 100,
-      fillGeometry: geometry
+      fillGeometry: geometry,
+      vectorNetwork: {
+        vertices: [{ x: 0, y: 0 }],
+        segments: [],
+        regions: []
+      }
     })
+    ellipse.source = {
+      ...ellipse.source,
+      format: 'fig',
+      fig: {
+        ...ellipse.source.fig,
+        rawNodeFields: {
+          strokeWeight: 2,
+          vectorData: { vectorNetworkBlob: { __openPencilFigmaBlob: blob } },
+          fillGeometry: [{ commandsBlob: { __openPencilFigmaBlob: blob } }],
+          strokeGeometry: [{ commandsBlob: { __openPencilFigmaBlob: blob } }]
+        }
+      }
+    }
 
     const doc = new Y.Doc()
     const ynode = new Y.Map<unknown>()
     doc.getMap<Y.Map<unknown>>('nodes').set(ellipse.id, ynode)
     syncEncodedNodeToYMap(ellipse, ynode)
-    blob[0] = 99
-    const props = decodeNodeFromYjs(ynode)
 
-    expect(typeof ynode.get('fillGeometry')).not.toBe('string')
-    const decoded = props.fillGeometry as GeometryPath[]
-    expect(Array.isArray(decoded)).toBe(true)
-    const commandsBlob = expectDefined(decoded[0], 'decoded geometry path').commandsBlob
-    expect(commandsBlob).toBeInstanceOf(Uint8Array)
-    expect(Array.from(commandsBlob)).toEqual([1, 2, 3, 250])
-    expect(Array.isArray(props.strokeGeometry)).toBe(true)
+    expect(ynode.has('fillGeometry')).toBe(false)
+    expect(ynode.has('strokeGeometry')).toBe(false)
+    expect(ynode.get('vectorNetwork')).toMatchObject({ vertices: [{ x: 0, y: 0 }] })
+    expect(ynode.get('width')).toBe(100)
+    const source = ynode.get('source') as {
+      fig: { rawNodeFields: Record<string, unknown> }
+    }
+    expect(source.fig.rawNodeFields.strokeWeight).toBe(2)
+    expect(source.fig.rawNodeFields).not.toHaveProperty('vectorData')
+    expect(source.fig.rawNodeFields).not.toHaveProperty('fillGeometry')
+    expect(source.fig.rawNodeFields).not.toHaveProperty('strokeGeometry')
+    expect(JSON.stringify(source)).not.toContain('__openPencilFigmaBlob')
+    const props = decodeNodeFromYjs(ynode)
+    expect(props.fillGeometry).toBeUndefined()
+    expect(ellipse.fillGeometry[0]?.commandsBlob).toBe(blob)
+  })
+
+  test('instance overrides survive a Yjs state round-trip as maps', () => {
+    const graph = new SceneGraph()
+    const page = firstPage(graph)
+    const component = graph.createNode('COMPONENT', page.id, {
+      name: 'Card',
+      width: 10,
+      height: 10
+    })
+    const instance = graph.createInstance(component.id, page.id)
+    if (!instance) throw new Error('missing instance')
+    setInstanceOverride(instance.instanceOverrides, instance.id, instance.id, 'opacity', 0.25)
+    setInstanceOverride(instance.instanceOverrides, instance.id, 'child', 'text', 'Custom')
+
+    const doc = new Y.Doc()
+    const ynode = new Y.Map<unknown>()
+    doc.getMap<Y.Map<unknown>>('nodes').set(instance.id, ynode)
+    syncEncodedNodeToYMap(instance, ynode)
+
+    const copy = new Y.Doc()
+    Y.applyUpdate(copy, Y.encodeStateAsUpdate(doc))
+    const remote = copy.getMap<Y.Map<unknown>>('nodes').get(instance.id)
+    if (!remote) throw new Error('missing remote node')
+    const props = decodeNodeFromYjs(remote)
+    const overrides = props.instanceOverrides
+    if (!overrides) throw new Error('missing overrides')
+
+    expect(overrides.self).toBeInstanceOf(Map)
+    expect(overrides.descendants).toBeInstanceOf(Map)
+    expect(getInstanceOverride(overrides, instance.id, instance.id, 'opacity')).toBe(0.25)
+    expect(getInstanceOverride(overrides, instance.id, 'child', 'text')).toBe('Custom')
   })
 
   test('a fresh peer reconstructs one ellipse with no duplicate child entries', async () => {
@@ -232,6 +308,89 @@ describe('collab yjs-sync', () => {
         switchPage.mockRestore()
         log.mockRestore()
       }
+    })
+  })
+
+  test('a large document is shared in several updates, with no image bytes in the Y.Doc', async () => {
+    const images = createMemoryRoomImages()
+    await withSyncedStores(
+      async ({ hostStore, peerStore, hostSync, hostDoc }) => {
+        const page = firstPage(hostStore.graph)
+        const cover = new Uint8Array([137, 80, 78, 71])
+        hostStore.graph.images.set('cover', cover)
+        for (let index = 0; index < 50; index++) {
+          hostStore.graph.createNode('RECTANGLE', page.id, {
+            name: `Layer ${index}`,
+            fills: [
+              {
+                type: 'IMAGE',
+                color: { r: 0, g: 0, b: 0, a: 1 },
+                opacity: 1,
+                visible: true,
+                imageHash: 'cover',
+                imageScaleMode: 'FILL'
+              }
+            ]
+          })
+        }
+
+        const updates: Uint8Array[] = []
+        hostDoc.on('update', (update: Uint8Array) => {
+          updates.push(update)
+        })
+        await hostSync.syncAllNodesInChunks()
+
+        expect(updates.length).toBeGreaterThan(1)
+        const whole = Y.encodeStateAsUpdate(hostDoc)
+        expect(Math.max(...updates.map((update) => update.byteLength))).toBeLessThan(whole.byteLength)
+        expect(hostDoc.getMap('images').size).toBe(0)
+        expect(images.get('cover')).toEqual(cover)
+        expect(peerStore.graph.rootId).toBe(hostStore.graph.rootId)
+        for (const node of hostStore.graph.getAllNodes()) {
+          expect(peerStore.graph.getNode(node.id)?.parentId).toBe(node.parentId)
+        }
+      },
+      { hostImageBytes: images }
+    )
+  })
+
+  test('a chunked share leaves geometry blobs on the local graph', async () => {
+    await withSyncedStores(async ({ hostStore, hostSync, hostDoc }) => {
+      const page = firstPage(hostStore.graph)
+      const blob = new Uint8Array(64 * 1024)
+      blob[0] = 7
+      const source = createDefaultSourceMetadata()
+      source.format = 'fig'
+      source.fig.rawNodeFields = {
+        fillGeometry: [{ commandsBlob: { __openPencilFigmaBlob: blob } }]
+      }
+      source.fig.derivedSymbolData = [{ commandsBlob: { __openPencilFigmaBlob: blob } }]
+      const node = hostStore.graph.createNode('VECTOR', page.id, {
+        name: 'Heavy',
+        x: 12,
+        fillGeometry: [{ windingRule: 'NONZERO', commandsBlob: blob }],
+        source
+      })
+
+      const updates: Uint8Array[] = []
+      hostDoc.on('update', (update: Uint8Array) => {
+        updates.push(update)
+      })
+      await hostSync.syncAllNodesInChunks()
+
+      const ynode = hostDoc.getMap<Y.Map<unknown>>('nodes').get(node.id)
+      expect(ynode?.has('fillGeometry')).toBe(false)
+      expect(ynode?.has('strokeGeometry')).toBe(false)
+      const sharedSource = ynode?.get('source') as {
+        fig: { rawNodeFields: Record<string, unknown>; derivedSymbolData: unknown[] }
+      }
+      expect(sharedSource.fig.rawNodeFields).not.toHaveProperty('fillGeometry')
+      expect(JSON.stringify(sharedSource.fig.derivedSymbolData)).not.toContain('__openPencilFigmaBlob')
+      expect(ynode?.get('name')).toBe('Heavy')
+      expect(ynode?.get('x')).toBe(12)
+      expect(hostStore.graph.getNode(node.id)?.fillGeometry[0]?.commandsBlob[0]).toBe(7)
+      expect(updates.length).toBeGreaterThan(0)
+      expect(Math.max(...updates.map((update) => update.byteLength))).toBeLessThan(blob.byteLength)
     })
   })
 
@@ -368,26 +527,224 @@ describe('collab yjs-sync', () => {
   })
 
   test('image fills sync image bytes', async () => {
-    await withSyncedStores(({ hostStore, peerStore, hostSync }) => {
-      const hostPage = firstPage(hostStore.graph)
-      hostSync.syncAllNodesToYjs()
+    const images = createMemoryRoomImages()
+    await withSyncedStores(
+      ({ hostStore, peerStore, hostSync, hostDoc, peerDoc }) => {
+        const hostPage = firstPage(hostStore.graph)
+        hostSync.syncAllNodesToYjs()
+        const imageHash = 'image-hash'
+        const imageFill: Fill = {
+          type: 'IMAGE',
+          color: { r: 0, g: 0, b: 0, a: 1 },
+          opacity: 1,
+          visible: true,
+          imageHash,
+          imageScaleMode: 'FILL'
+        }
+        const rect = hostStore.graph.createNode('RECTANGLE', hostPage.id, { fills: [imageFill] })
+        hostStore.graph.images.set(imageHash, new Uint8Array([9, 8, 7]))
+
+        hostSync.syncNodeToYjs(rect.id)
+
+        expect(getNodeOrThrow(peerStore.graph, rect.id).fills[0]?.imageHash).toBe(imageHash)
+        expect(Array.from(expectDefined(images.get(imageHash), 'saved image'))).toEqual([9, 8, 7])
+        expect(hostStore.graph.images.get(imageHash)).toEqual(new Uint8Array([9, 8, 7]))
+        expect(peerStore.graph.images.has(imageHash)).toBe(false)
+        expect(hostDoc.getMap('images').size).toBe(0)
+        expect(peerDoc.getMap('images').size).toBe(0)
+      },
+      { hostImageBytes: images }
+    )
+  })
+
+  test('removing the last image fill drops the saved bytes', async () => {
+    const images = createMemoryRoomImages()
+    await withSyncedStores(
+      ({ hostStore, hostSync }) => {
+        const hostPage = firstPage(hostStore.graph)
+        hostSync.syncAllNodesToYjs()
+        const imageHash = 'image-hash'
+        const sharedHash = 'shared-hash'
+        const imageFill = (hash: string): Fill => ({
+          type: 'IMAGE',
+          color: { r: 0, g: 0, b: 0, a: 1 },
+          opacity: 1,
+          visible: true,
+          imageHash: hash,
+          imageScaleMode: 'FILL'
+        })
+        const rect = hostStore.graph.createNode('RECTANGLE', hostPage.id, {
+          fills: [imageFill(imageHash)]
+        })
+        const other = hostStore.graph.createNode('RECTANGLE', hostPage.id, {
+          fills: [imageFill(sharedHash)]
+        })
+        hostStore.graph.images.set(imageHash, new Uint8Array([9, 8, 7]))
+        hostStore.graph.images.set(sharedHash, new Uint8Array([1, 2, 3]))
+        hostSync.syncNodeToYjs(rect.id)
+        hostSync.syncNodeToYjs(other.id)
+
+        hostStore.graph.updateNode(rect.id, { fills: [] })
+        hostSync.syncNodeToYjs(rect.id)
+
+        expect(images.has(imageHash)).toBe(false)
+        expect(images.get(sharedHash)).toEqual(new Uint8Array([1, 2, 3]))
+      },
+      { hostImageBytes: images }
+    )
+  })
+
+  test('a remote image-key delete does not clear local image bytes', async () => {
+    await withSyncedStores(({ hostDoc, peerStore }) => {
       const imageHash = 'image-hash'
-      const imageFill: Fill = {
-        type: 'IMAGE',
-        color: { r: 0, g: 0, b: 0, a: 1 },
-        opacity: 1,
-        visible: true,
-        imageHash,
-        imageScaleMode: 'FILL'
+      const bytes = new Uint8Array([4, 5, 6])
+      peerStore.graph.images.set(imageHash, bytes)
+      hostDoc.getMap<Uint8Array>('images').set(imageHash, bytes)
+      hostDoc.getMap<Uint8Array>('images').delete(imageHash)
+
+      expect(peerStore.graph.images.get(imageHash)).toEqual(bytes)
+      expect(hostDoc.getMap('images').size).toBe(0)
+    })
+  })
+
+  test('a fat image map is copied aside and left out of the room snapshot', async () => {
+    const images = createMemoryRoomImages()
+    let replaced = false
+    await withSyncedStores(async ({ hostStore, hostDoc }) => {
+      const payload = new Uint8Array(8_000)
+      payload[0] = 9
+      payload[1] = 8
+      hostDoc.getMap<Uint8Array>('images').set('image-hash', payload)
+      await settleRoomImages({
+        store: hostStore,
+        ydoc: hostDoc,
+        yimages: hostDoc.getMap('images'),
+        held: new Map([['image-hash', payload]]),
+        images,
+        setSuppressYjsEvents: () => undefined,
+        replaceStoredState: async () => {
+          replaced = true
+        },
+        isActive: () => true
+      })
+
+      expect(hostDoc.getMap('images').size).toBe(0)
+      expect(hostStore.graph.images.get('image-hash')).toBe(payload)
+      expect(images.get('image-hash')).toEqual(payload)
+      expect(replaced).toBe(true)
+      const update = Y.encodeStateAsUpdate(hostDoc)
+      const probe = new Y.Doc()
+      Y.applyUpdate(probe, update)
+      expect(probe.getMap('images').size).toBe(0)
+      expect(update.byteLength).toBeLessThan(payload.byteLength)
+      probe.destroy()
+    })
+  })
+
+  test('a small file still accepts a room update of any size', () => {
+    expect(remoteUpdateIsHistoricalDump(10, REMOTE_DUMP_UPDATE_BYTES + 1)).toBe(false)
+    expect(
+      remoteUpdateIsHistoricalDump(SYNC_ALL_NODES_SYNC_LIMIT + 1, REMOTE_DUMP_UPDATE_BYTES)
+    ).toBe(false)
+    expect(
+      remoteUpdateIsHistoricalDump(SYNC_ALL_NODES_SYNC_LIMIT + 1, REMOTE_DUMP_UPDATE_BYTES + 1)
+    ).toBe(true)
+  })
+
+  test('a file over the sync limit stays out of the room until someone edits it', async () => {
+    const extra = SYNC_ALL_NODES_SYNC_LIMIT
+    const warn = spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      await withSyncedStores(
+        async ({ hostStore, peerStore, hostSync, peerSync, hostDoc }) => {
+          const pageId = firstPage(hostStore.graph).id
+          const order = [...getNodeOrThrow(peerStore.graph, pageId).childIds]
+          hostSync.claimSharedDocument()
+          peerSync.claimSharedDocument()
+          await hostSync.syncAllNodesInChunks()
+          hostSync.syncAllNodesToYjs()
+
+          expect(hostStore.graph.nodes.size).toBeGreaterThan(SYNC_ALL_NODES_SYNC_LIMIT)
+          expect(hostDoc.getMap('nodes').size).toBe(0)
+          expect(peerStore.graph.nodes.size).toBe(hostStore.graph.nodes.size)
+
+          hostStore.graph.updateNode('layer-3', { x: 42, name: 'Edited' })
+          hostSync.syncNodeToYjs('layer-3')
+
+          expect(hostDoc.getMap('nodes').size).toBeLessThan(SYNC_ALL_NODES_SYNC_LIMIT)
+          expect(getNodeOrThrow(peerStore.graph, 'layer-3')).toMatchObject({
+            x: 42,
+            name: 'Edited',
+            parentId: pageId
+          })
+          expect(getNodeOrThrow(peerStore.graph, 'layer-0').parentId).toBe(pageId)
+          expect(getNodeOrThrow(peerStore.graph, pageId).childIds).toEqual(order)
+          expect(peerStore.graph.nodes.size).toBe(hostStore.graph.nodes.size)
+
+          const removal = createLocalEdit()
+          hostStore.graph.deleteNode('layer-4')
+          removal.deleted.add('layer-4')
+          hostSync.syncLocalEdit(removal)
+          await Promise.resolve()
+
+          expect(peerStore.graph.getNode('layer-4')).toBeUndefined()
+          expect(getNodeOrThrow(peerStore.graph, pageId).childIds).toEqual(
+            getNodeOrThrow(hostStore.graph, pageId).childIds
+          )
+          expect(getNodeOrThrow(peerStore.graph, 'layer-0').parentId).toBe(pageId)
+          expect(peerStore.graph.nodes.size).toBe(hostStore.graph.nodes.size)
+          expect(hostDoc.getMap('nodes').size).toBeLessThan(SYNC_ALL_NODES_SYNC_LIMIT)
+          expect(warn.mock.calls.some((call) => String(call[0]).includes('large document'))).toBe(
+            true
+          )
+        },
+        { hostGraph: documentWithLayers(extra), peerGraph: documentWithLayers(extra) }
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  test('a historical full node map is not applied onto the open graph', async () => {
+    await withSyncedStores(async ({ hostStore, peerStore, peerSync, hostDoc }) => {
+      const page = firstPage(hostStore.graph)
+      const kept = hostStore.graph.createNode('RECTANGLE', page.id, {
+        id: 'kept',
+        x: 5,
+        name: 'Kept'
+      })
+      const before = hostStore.graph.nodes.size
+      const dump = new Y.Doc()
+      dump.transact(() => {
+        const nodes = dump.getMap<Y.Map<unknown>>('nodes')
+        for (let index = 0; index < SYNC_ALL_NODES_SYNC_LIMIT + 1; index++) {
+          const ynode = new Y.Map<unknown>()
+          ynode.set('type', 'RECTANGLE')
+          ynode.set('name', `Dump ${index}`)
+          ynode.set('x', 9)
+          nodes.set(`dump-${index}`, ynode)
+        }
+      })
+      const warn = spyOn(console, 'warn').mockImplementation(() => undefined)
+      try {
+        Y.applyUpdate(hostDoc, Y.encodeStateAsUpdate(dump))
+        expect(hostStore.graph.nodes.size).toBe(before)
+        expect(hostStore.graph.getNode('dump-0')).toBeUndefined()
+        expect(getNodeOrThrow(hostStore.graph, kept.id)).toMatchObject({ x: 5, parentId: page.id })
+
+        peerSync.claimSharedDocument()
+        const peerPage = firstPage(peerStore.graph)
+        const live = peerStore.graph.createNode('RECTANGLE', peerPage.id, {
+          id: 'live',
+          x: 3,
+          name: 'Live'
+        })
+        peerSync.syncNodeToYjs(live.id)
+        expect(getNodeOrThrow(hostStore.graph, 'live')).toMatchObject({ x: 3, name: 'Live' })
+      } finally {
+        warn.mockRestore()
+        dump.destroy()
       }
-      const rect = hostStore.graph.createNode('RECTANGLE', hostPage.id, { fills: [imageFill] })
-      hostStore.graph.images.set(imageHash, new Uint8Array([9, 8, 7]))
-
-      hostSync.syncNodeToYjs(rect.id)
-
-      expect(
-        Array.from(expectDefined(peerStore.graph.images.get(imageHash), 'peer image'))
-      ).toEqual([9, 8, 7])
     })
   })
 })

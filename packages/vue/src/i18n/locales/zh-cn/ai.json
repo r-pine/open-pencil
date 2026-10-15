@@ -148,6 +148,8 @@
   "chatInsufficientCredit": "提供商账户的余额或配额不足。请充值后重试。",
   "chatOutputLimit": "模型在推理时耗尽了输出词元。请提高最大输出词元数或降低推理强度。",
   "chatRequestFailed": "模型请求失败。请检查提供商设置后重试。",
+  "chatRepeatedAction": "模型重复了同一操作，运行已停止。",
+  "chatStreamStalled": "模型没有返回内容。连接一直开着，但没有新数据到达。请再试一次。",
   "visionModelUnavailable": "附加图片前，请在设置中选择视觉模型。",
   "chatPiCompanionMissing": "Pi 需要 Harness 配套程序。运行引导式设置来安装它。",
   "chatPiCompanionOutdated": "Harness 配套程序与此版本的 OpenPencil 不匹配。运行引导式设置来更新它。",

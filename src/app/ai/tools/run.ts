@@ -3,6 +3,7 @@ import type { StepBudget } from '@open-pencil/core/tools'
 import type { UndoEntry } from '@open-pencil/scene-graph/undo'
 
 import { describeUndoneCalls, type CallRef } from '@/app/ai/chat/context'
+import { toolCallKey } from '@/app/ai/chat/loop'
 import { DEFAULT_AGENT_STEPS, resolveAgentStepLimit } from '@/app/ai/chat/step-limit'
 import type { PreviewFocus } from '@/app/ai/preview/canvas'
 import { getActiveEditorStore } from '@/app/editor/active-store'
@@ -40,6 +41,11 @@ export class Run {
   readonly changedCalls = new Set<string>()
   /** False once the reply finished, was stopped, or failed; its agent no longer moves. */
   active = true
+  /** The model asked for a tool call this run already made, so the loop stops. */
+  repeatedAction = false
+  /** Cursor stopped sending a reply. The step is not retried. */
+  stalled = false
+  private readonly executedToolCalls = new Set<string>()
   private toolsInFlight = 0
   private whenSettled: Promise<void> = Promise.resolve()
   private settle: () => void = () => undefined
@@ -51,6 +57,21 @@ export class Run {
 
   hitLimit(): boolean {
     return this.currentSteps >= this.maxSteps
+  }
+
+  /**
+   * Records a tool call the model just requested. The first time, it may run.
+   * The same name and arguments again — including a call that already failed
+   * because `id` was missing — must not run, and the loop must not continue.
+   */
+  acceptToolCall(name: string, args: unknown): boolean {
+    const key = toolCallKey(name, args)
+    if (this.executedToolCalls.has(key)) {
+      this.repeatedAction = true
+      return false
+    }
+    this.executedToolCalls.add(key)
+    return true
   }
 
   /** A tool started editing for this run; `settled` waits until every such tool is done. */
@@ -89,7 +110,10 @@ function getRunState(store?: EditorStore): RunState {
   return created
 }
 
-/** Begin a run on the page the user is viewing, as a message is sent. */
+/**
+ * Begin a run on the page the user is viewing, as a message is sent.
+ * Each send, including regenerate, replaces the previous run.
+ */
 export function startRun(store: EditorStore, maxSteps: number, model?: string): Run {
   const state = getRunState(store)
   const pageId = store.state.currentPageId

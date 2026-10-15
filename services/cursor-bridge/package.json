@@ -1,0 +1,11 @@
+{
+  "name": "open-pencil-cursor-bridge",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.16.0"
+  }
+}

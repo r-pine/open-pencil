@@ -1,7 +1,13 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 
 import { guid } from '#fig-tests/helpers/guid'
-import { figComponentUsePages, patchFigMessage, patchFigRecords } from '#fig/record-patch/index'
+import {
+  decodeFigPatchRecords,
+  encodeFigPatchRecords,
+  figComponentUsePages,
+  patchFigMessage,
+  patchFigRecords
+} from '#fig/record-patch/index'
 import { deflateSync } from 'fflate'
 
 import {
@@ -172,5 +178,40 @@ describe('splicing an encoded message', () => {
       'Renamed again',
       'Added'
     ])
+  })
+
+  test('records encoded for the patch worker splice the same message as the objects', () => {
+    const codec = getCompiledSchema()
+    const schema = deflateSync(getSchemaBytes())
+    const archive = [
+      record(0, null, { type: 'DOCUMENT', name: 'Document' }),
+      record(1, 0, { type: 'CANVAS', name: 'Page' }),
+      record(2, 1, { name: 'Frame' })
+    ]
+    const data = codec.encodeMessage({
+      type: 'NODE_CHANGES',
+      sessionID: 0,
+      ackID: 0,
+      nodeChanges: archive
+    })
+    const records = [
+      record(2, 1, {
+        name: 'Edited',
+        type: 'INSTANCE',
+        symbolData: { symbolID: guid(1) }
+      })
+    ]
+    const encoded = encodeFigPatchRecords(schema, records)
+    expect(encoded.byteOffset).toBe(0)
+    expect(encoded.byteLength).toBe(encoded.buffer.byteLength)
+    const patch = {
+      records: decodeFigPatchRecords(schema, encoded),
+      blobs: [] as Uint8Array[],
+      removed: [],
+      replaceVariables: false
+    }
+    expect(patchFigMessage(schema, data, patch)).toEqual(
+      patchFigMessage(schema, data, { ...patch, records })
+    )
   })
 })

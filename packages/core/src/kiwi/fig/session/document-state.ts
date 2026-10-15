@@ -18,6 +18,12 @@ interface ReaderState {
   complete?: true
 }
 const states = new WeakMap<SceneGraph, ReaderState>()
+/**
+ * Rebuilding a session from the archive parses the whole file and copies every image on the main
+ * thread. aska-app is about 35MB and ~1900 images; that fallback is what freezes the tab after
+ * the population worker is marked stale. Smaller files still recover here.
+ */
+const MAIN_THREAD_FIG_RECOVERY_BYTES = 2 * 1024 * 1024
 
 export function registerReaderRecovery(
   graph: SceneGraph,
@@ -63,7 +69,10 @@ export function hasReaderSession(graph: SceneGraph): boolean {
 }
 
 export function populateFigPage(graph: SceneGraph, pageId: string): boolean {
-  return isReaderPagePending(graph, pageId) ? recoverReaderPage(graph, pageId) : false
+  if (!isReaderPagePending(graph, pageId)) return false
+  // A large archive refuses main-thread recovery with null. Callers that only need a boolean
+  // treat that as "this page was not loaded".
+  return recoverReaderPage(graph, pageId) === true
 }
 
 export function populateAllFigPages(graph: SceneGraph): boolean {
@@ -147,12 +156,22 @@ export function releaseReaderRecovery(graph: SceneGraph): void {
   states.delete(graph)
 }
 
-export function recoverReaderPage(graph: SceneGraph, pageId: string): boolean {
+export function recoverReaderPage(graph: SceneGraph, pageId: string): boolean | null {
   const state = states.get(graph)
   if (!state) throw new Error('No reader recovery state')
   if (state.complete) return false
   if (!state.session) {
     if (!state.checkpoint || !state.bytes) throw new Error('Missing reader checkpoint')
+    // Page switches call this when the population worker times out, errors, or is already busy.
+    // Rebuilding the session unzips the archive, inflates the canvas, and copies every image on
+    // the UI thread. Null fails that populate so the page on screen stays; false would look like
+    // the page had already loaded.
+    if (state.bytes.byteLength > MAIN_THREAD_FIG_RECOVERY_BYTES) {
+      console.warn(
+        '[fig] Population worker did not load this page; skipping main-thread recovery of a large archive'
+      )
+      return null
+    }
     state.session = createFigDocumentSession(state.bytes, readerSessionOptions(state.diagnostics), {
       graph,
       checkpoint: state.checkpoint

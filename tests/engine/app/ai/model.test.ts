@@ -73,6 +73,36 @@ describe('model provider registry', () => {
     expect(requestBody).toContain('"model":"MiniMax-M3"')
   })
 
+  test('sends Cursor chat through the same-origin bridge', async () => {
+    let requestURL = ''
+    let authorization = ''
+    const fetchSpy: FetchFunction = async (input, init) => {
+      requestURL = String(input)
+      authorization = new Headers(init?.headers).get('authorization') ?? ''
+      throw new Error('stop')
+    }
+    const model = languageModelInstance(
+      modelProviderAdapter('cursor').create(
+        {
+          providerID: 'cursor',
+          apiKey: 'test-token',
+          modelID: 'composer-2',
+          customModelID: '',
+          customBaseURL: '',
+          customAPIType: 'completions'
+        },
+        { fetch: fetchSpy }
+      )
+    )
+    await Promise.resolve(
+      model.doGenerate({ prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] })
+    ).catch(() => undefined)
+
+    expect(requestURL).toContain('/api/cursor/chat/completions')
+    expect(authorization).toBe('Bearer test-token')
+    expect(requestURL).not.toContain('api2.cursor.sh')
+  })
+
   test('registers every direct provider without handling agent runtimes as models', () => {
     for (const provider of AI_PROVIDERS.filter((entry) => entry.id !== 'harness:pi')) {
       expect(modelProviderAdapter(provider.id).create).toBeFunction()

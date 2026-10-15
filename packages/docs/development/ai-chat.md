@@ -42,6 +42,8 @@ When the chat's own `onFinish` reports a reply that was stopped, failed, or cut 
 
 Diagnostics record `chat.completed`, `chat.stopped`, or `chat.failed`.
 
+Cursor chat completions are OpenAI-compatible streams from `/api/cursor/chat/completions`. After a tool result, the AI SDK sends the next step itself: the tool message is `{ role: "tool", tool_call_id, content }`, which is the shape the bridge reads. The response is parsed by the SDK's event-source reader, which emits only `data:` events and ignores `: ping` comments. Those comments used to hold the reply open with no timeout and no error. `guardCursorEventStream` (`src/app/ai/providers/cursor/event-stream.ts`) still forwards a later `data:` event, including tool-call deltas, and fails the reply as `stalled` when the body is only comments or stays on comments with no `data:` event. The panel then shows `chatStreamStalled` and the spinner stops.
+
 `submission/undone.ts` records the reply's turn (`turns.ts`) once the run settles, so an edit landing after Stop belongs to the reply.
 
 ## Undo and the model

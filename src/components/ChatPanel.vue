@@ -142,6 +142,10 @@ const failureMessage = computed(() => {
       return ai.value.chatRateLimited
     case 'request-failed':
       return ai.value.chatRequestFailed
+    case 'repeated-action':
+      return ai.value.chatRepeatedAction
+    case 'stalled':
+      return ai.value.chatStreamStalled
     default:
       return null
   }
@@ -171,6 +175,11 @@ watch(
     failureToast = null
     if (!reason) return
     const failedId = chat.value?.messages.at(-1)?.id
+    // A repeated action ends this run. Asking again is a new generation with a fresh run.
+    const recover =
+      reason === 'repeated-action'
+        ? { label: ai.value.regenerate, run: () => retryFailed(failedId) }
+        : { label: ai.value.retryRequest, run: () => retryFailed(failedId) }
     failureToast = toast.error(
       failureMessage.value ?? ai.value.chatRequestFailed,
       failureHasSettingsAction.value
@@ -178,7 +187,7 @@ watch(
             label: ai.value.openProviderSettingsAction,
             run: () => openSettingsDialog('ai')
           }
-        : { label: ai.value.retryRequest, run: () => retryFailed(failedId) }
+        : recover
     )
   }
 )

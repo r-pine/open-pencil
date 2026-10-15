@@ -495,6 +495,8 @@
   "lightness": "Chiarezza",
   "chroma": "Croma",
   "alpha": "Alfa",
+  "eyedropper": "Contagocce",
+  "eyedropperUnsupported": "Il contagocce richiede Chrome o Edge su desktop",
   "individualPadding": "Spaziatura interna individuale",
   "strokeSettings": "Impostazioni del tratto",
   "strokeDashLength": "Trattino",

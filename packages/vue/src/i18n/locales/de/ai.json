@@ -142,6 +142,8 @@
   "chatInsufficientCredit": "Das Anbieterkonto hat nicht genügend Guthaben oder Kontingent. Lade es auf und versuche es erneut.",
   "chatOutputLimit": "Das Modell hat beim Schlussfolgern das Ausgabetoken-Limit erreicht. Erhöhe die maximalen Ausgabetoken oder verringere den Schlussfolgerungsaufwand.",
   "chatRequestFailed": "Die Modellanfrage ist fehlgeschlagen. Prüfe die Anbietereinstellungen und versuche es erneut.",
+  "chatRepeatedAction": "Das Modell hat dieselbe Aktion wiederholt, und der Lauf wurde gestoppt.",
+  "chatStreamStalled": "Das Modell hat keine Antwort geschickt. Die Verbindung blieb offen, aber es kamen keine neuen Daten. Versuche es erneut.",
   "visionModelUnavailable": "Wähle in den Einstellungen ein Vision-Modell aus, bevor du Bilder anhängst.",
   "chatPiCompanionMissing": "Pi braucht den Harness-Begleiter. Starte die geführte Einrichtung, um ihn zu installieren.",
   "chatPiCompanionOutdated": "Der Harness-Begleiter passt nicht zu dieser OpenPencil-Version. Starte die geführte Einrichtung, um ihn zu aktualisieren.",

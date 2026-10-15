@@ -21,6 +21,7 @@ import {
 } from './vite/automation'
 import { copyCanvasKitAssetsPlugin } from './vite/canvaskit-assets'
 import { aiIconCollection } from './vite/icons'
+import { selfHostedMqttBrokerPlugin } from './vite/mqtt-broker'
 import { openPencilPwaPlugin } from './vite/pwa'
 import { rawMarkdownPlugin } from './vite/raw-markdown'
 import { createDevServerOptions } from './vite/server'
@@ -50,6 +51,7 @@ export default defineConfig(async ({ command }) => {
       tailwindcss(),
       Icons({ compiler: 'vue3', customCollections: { ai: aiIconCollection() } }),
       Components({ resolvers: [IconsResolver({ prefix: 'icon', customCollections: ['ai'] })] }),
+      selfHostedMqttBrokerPlugin(),
       openPencilAutomationPlugin(command, host),
       vue(),
       openPencilPwaPlugin()

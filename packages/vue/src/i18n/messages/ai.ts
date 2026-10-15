@@ -202,6 +202,9 @@ export const aiMessageDefaults = {
   chatNetworkFailed: 'OpenPencil could not reach the provider. Check your connection and endpoint.',
   chatRateLimited: 'The provider rate limit was reached. Wait a moment and try again.',
   chatRequestFailed: 'The model request failed. Check the provider settings and try again.',
+  chatRepeatedAction: 'The model repeated the same action, and the run was stopped.',
+  chatStreamStalled:
+    'The model sent no reply. The connection stayed open, but no new data arrived. Try again.',
   openProviderSettingsAction: 'Open settings',
   visionModelUnavailable: 'Choose a Vision model in Settings before attaching images.',
   chatPiCompanionMissing: 'Pi needs the Harness companion. Run guided setup to install it.',
@@ -328,6 +331,18 @@ export const aiMessageDefaults = {
   aiSetupOpenRouterNoCredits:
     'This OpenRouter account has no credits yet. Add credits on OpenRouter to use paid models such as the recommended one.',
   aiSetupOpenRouterChange: 'Use a different account',
+  cursorSignIn: 'Sign in with Cursor',
+  cursorSignInWaiting: 'Finish signing in to Cursor in the browser window.',
+  cursorSignInReopen: 'Open again',
+  cursorSignInBlocked: 'The browser blocked the sign-in window. Allow pop-ups and try again.',
+  cursorSignInExpired: 'Sign-in took too long. Try again.',
+  cursorSignInFailed: 'Couldn’t sign in to Cursor. Try again or paste a token.',
+  cursorSignedIn: 'Signed in. The token is kept in this browser only.',
+  cursorKeyHint:
+    'Sign in, or paste a Cursor access token. It is stored in this browser, like other API keys.',
+  cursorModelsLoading: 'Loading models from your Cursor subscription…',
+  cursorModelsEmpty: 'No models were returned for this subscription.',
+  cursorModelsError: 'Couldn’t load models. Check the token and try again.',
   aiSetupUseRecommended: 'Use recommended setup',
   aiSetupRolesDescription:
     'Choose a model for each kind of work. We picked recommended ones from what you connected; anything else you configured stays as it is.'

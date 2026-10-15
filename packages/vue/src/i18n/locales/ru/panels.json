@@ -502,6 +502,8 @@
   "lightness": "Светлота",
   "chroma": "Цветность",
   "alpha": "Альфа",
+  "eyedropper": "Пипетка",
+  "eyedropperUnsupported": "Пипетка доступна в Chrome или Edge на компьютере",
   "individualPadding": "Отступы по сторонам",
   "strokeSettings": "Настройки обводки",
   "strokeDashLength": "Штрих",

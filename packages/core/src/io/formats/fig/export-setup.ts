@@ -37,6 +37,7 @@ import {
   settleFontDigestMap
 } from '#core/kiwi/fig/node-change/serialize'
 
+import { figThumbnailIsExpensive, isFigSaveMemoryError } from './thumbnail-budget'
 import { assignVariableGuid, assignVariableGuids } from './variable-export'
 
 /**
@@ -59,14 +60,29 @@ export interface CanvasExportEntry {
 const THUMBNAIL_WIDTH = 512
 const THUMBNAIL_HEIGHT = 512
 
-async function renderFigThumbnail(
+interface RenderedFigThumbnail {
+  png: Uint8Array
+  /** The page was not painted, so a patched archive should keep the thumbnail it has. */
+  skipped: boolean
+}
+
+function skippedThumbnail(): RenderedFigThumbnail {
+  return { png: THUMBNAIL_1X1, skipped: true }
+}
+
+/** Drop decoded fills from a thumbnail that ran out of memory, so the patch can still clone. */
+function releaseThumbnailImages(renderer: SkiaRenderer | undefined): void {
+  renderer?.imageCache.clear()
+  renderer?.invalidateAllPictures()
+}
+
+async function paintFigThumbnail(
   graph: SceneGraph,
-  pageId: string | undefined,
-  ck?: CanvasKit,
-  renderer?: SkiaRenderer,
-  renderHeadless = false
+  pageId: string,
+  ck: CanvasKit | undefined,
+  renderer: SkiaRenderer | undefined,
+  renderHeadless: boolean
 ): Promise<Uint8Array> {
-  if (!pageId) return THUMBNAIL_1X1
   if (ck && renderer) {
     return (
       renderThumbnail(ck, renderer, graph, pageId, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT) ??
@@ -79,6 +95,28 @@ async function renderFigThumbnail(
     (await headlessRenderThumbnail(graph, pageId, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT)) ??
     THUMBNAIL_1X1
   )
+}
+
+async function renderFigThumbnail(
+  graph: SceneGraph,
+  pageId: string | undefined,
+  ck?: CanvasKit,
+  renderer?: SkiaRenderer,
+  renderHeadless = false
+): Promise<RenderedFigThumbnail> {
+  // Huge documents decode every image fill at a 2e9 viewport. Skip that and keep saving.
+  if (figThumbnailIsExpensive(graph)) return skippedThumbnail()
+  if (!pageId) return { png: THUMBNAIL_1X1, skipped: false }
+  try {
+    return {
+      png: await paintFigThumbnail(graph, pageId, ck, renderer, renderHeadless),
+      skipped: false
+    }
+  } catch (error) {
+    if (!isFigSaveMemoryError(error)) throw error
+    releaseThumbnailImages(renderer)
+    return skippedThumbnail()
+  }
 }
 
 /**
@@ -491,6 +529,8 @@ export function figExportRecordOptions(setup: FigExportSetup) {
 
 export interface FigFileExtras {
   thumbnailPNG: Uint8Array
+  /** The page was not painted. A patch keeps the archive thumbnail instead of this placeholder. */
+  thumbnailSkipped: boolean
   metaJSON: string
   images: Array<{ name: string; data: Uint8Array }>
 }
@@ -508,7 +548,7 @@ export async function figFileExtras(
   renderHeadlessThumbnail: boolean
 ): Promise<FigFileExtras> {
   const currentPageId = pageId ?? findFigThumbnailPageId(graph.getPages(true))
-  const thumbnailPNG = await renderFigThumbnail(
+  const thumbnail = await renderFigThumbnail(
     graph,
     currentPageId,
     ck,
@@ -520,5 +560,10 @@ export async function figFileExtras(
     app: 'OpenPencil',
     createdAt: new Date().toISOString()
   })
-  return { thumbnailPNG, metaJSON, images: figImageEntries(graph.images, imageNames) }
+  return {
+    thumbnailPNG: thumbnail.png,
+    thumbnailSkipped: thumbnail.skipped,
+    metaJSON,
+    images: figImageEntries(graph.images, imageNames)
+  }
 }

@@ -61,6 +61,31 @@ describe('panel edits while text is edited', () => {
     expect(node().styleRuns).toEqual([])
   })
 
+  test('filling selected characters clears the fill style and that color variable', async () => {
+    const { editor, id, node } = await editingWorld()
+    const layerFills = node().fills
+    editor.graph.updateNode(id, {
+      fillStyleId: '0:72',
+      boundVariables: { 'fills/0/color': 'var:splash', fontSize: 'var:size' }
+    })
+
+    editor.updateNodeWithUndo(id, { fills: [RED] }, 'Change fill')
+
+    expect(node().fills).toEqual(layerFills)
+    expect(node().fillStyleId).toBeNull()
+    expect(node().boundVariables['fills/0/color']).toBeUndefined()
+    expect(node().boundVariables.fontSize).toBe('var:size')
+    expect(node().styleRuns).toEqual([
+      { start: 6, length: 5, style: { fills: [RED], fillStyleId: null } }
+    ])
+
+    editor.undoAction()
+    expect(node().fillStyleId).toBe('0:72')
+    expect(node().boundVariables['fills/0/color']).toBe('var:splash')
+    expect(node().boundVariables.fontSize).toBe('var:size')
+    expect(node().styleRuns).toEqual([])
+  })
+
   test('record a dragged size as one step back to the runs it started from', async () => {
     const { editor, id, node } = await editingWorld()
 
@@ -74,6 +99,30 @@ describe('panel edits while text is edited', () => {
     expect(node().styleRuns).toEqual([])
     editor.redoAction()
     expect(node().styleRuns).toEqual([{ start: 6, length: 5, style: { fontSize: 40 } }])
+  })
+
+  test('a fill sample of the whole text updates the layer fill', async () => {
+    const { editor, id, node } = await editingWorld()
+    const state = expectDefined(editor.textEditor?.state, 'text editor state')
+    state.selectionAnchor = 0
+    state.cursor = node().text.length
+    editor.graph.updateNode(id, { fillStyleId: '1:72' })
+
+    editor.updateNodeWithUndo(id, { fills: [RED] }, 'Change fill')
+
+    expect(node().fillStyleId).toBeNull()
+    expect(node().fills).toEqual([RED])
+    expect(editor.getTextSelectionStyle(node())?.fills).toEqual([RED])
+  })
+
+  test('changing font size keeps the fill style', async () => {
+    const { editor, id, node } = await editingWorld()
+    editor.graph.updateNode(id, { fillStyleId: '1:72' })
+
+    editor.updateNodeWithUndo(id, { fontSize: 32 }, 'Change font size')
+
+    expect(node().fillStyleId).toBe('1:72')
+    expect(node().styleRuns).toEqual([{ start: 6, length: 5, style: { fontSize: 32 } }])
   })
 
   test('style the layer when no characters are selected', async () => {

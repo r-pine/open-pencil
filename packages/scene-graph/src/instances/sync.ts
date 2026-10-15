@@ -7,6 +7,7 @@ import type { NodeCloneMode } from '../copy'
 import {
   getInstanceOverride,
   hasInstanceOverride as hasNodeInstanceOverride,
+  normalizeNodeInstanceOverrides,
   setInstanceOverride,
   type InstanceOverrideState
 } from '../instance-overrides'
@@ -215,7 +216,8 @@ export function enclosingInstanceOverrideFields(graph: SceneGraph, node: SceneNo
   let parent = node.parentId ? graph.nodes.get(node.parentId) : undefined
   while (parent) {
     if (parent.type === 'INSTANCE') {
-      fields.push(new Set(parent.instanceOverrides.descendants.get(node.id)?.keys()))
+      const overrides = normalizeNodeInstanceOverrides(parent)
+      fields.push(new Set(overrides.descendants.get(node.id)?.keys()))
     }
     parent = parent.parentId ? graph.nodes.get(parent.parentId) : undefined
   }

@@ -32,6 +32,11 @@ export interface LocalEdit {
   /** Parents layers left; displaced layers on their paths are re-recorded. */
   previousParents: Set<string>
   deleted: Set<string>
+  /**
+   * The edit came from loading a page out of a file. Its layers are already on the local graph,
+   * so the room only needs the slim fields, written in slices.
+   */
+  bulk: boolean
 }
 
 export function createLocalEdit(): LocalEdit {
@@ -40,12 +45,19 @@ export function createLocalEdit(): LocalEdit {
     placed: new Set(),
     reordered: new Set(),
     previousParents: new Set(),
-    deleted: new Set()
+    deleted: new Set(),
+    bulk: false
   }
 }
 
 export function isLocalEditEmpty(edit: LocalEdit): boolean {
-  return Object.values(edit).every((ids: Set<string>) => ids.size === 0)
+  return (
+    edit.changed.size === 0 &&
+    edit.placed.size === 0 &&
+    edit.reordered.size === 0 &&
+    edit.previousParents.size === 0 &&
+    edit.deleted.size === 0
+  )
 }
 
 /** The resolved layer tree of one shared document, kept beside the scene graph it mirrors. */
@@ -222,7 +234,12 @@ export function applySharedTree(
   ynodes: YNodes,
   meta: YMeta,
   changed: Iterable<string>,
-  deleted: Iterable<string>
+  deleted: Iterable<string>,
+  /**
+   * A large open file already orders the siblings the room has not met. Sorting those parents
+   * would pull the edited layers in front of that order.
+   */
+  preserveFileOrder = false
 ): void {
   const { tree } = shared
   const touched = new Set<string>()
@@ -251,7 +268,7 @@ export function applySharedTree(
     const parentId = tree.parentOf(id)
     if (parentId) touched.add(parentId)
   }
-  for (const parentId of touched) sortChildren(graph, tree, parentId)
+  for (const parentId of touched) sortChildren(graph, tree, parentId, preserveFileOrder)
 }
 
 /**
@@ -327,10 +344,18 @@ function applyMoves(graph: SceneGraph, moves: TreeMove[], touched: Set<string>):
   }
 }
 
-function sortChildren(graph: SceneGraph, tree: LayerTree, parentId: string): void {
+function sortChildren(
+  graph: SceneGraph,
+  tree: LayerTree,
+  parentId: string,
+  preserveFileOrder: boolean
+): void {
   const parent = graph.getNode(parentId)
   if (!parent) return
   const shared = tree.childrenOf(parentId).filter((id) => graph.getNode(id)?.parentId === parentId)
+  // Siblings the room has not met keep the order of the open file. Pulling the edited
+  // layers forward would reshuffle a document that was never copied into the room.
+  if (preserveFileOrder && shared.length !== parent.childIds.length) return
   const sharedIds = new Set(shared)
   const desired = [...shared, ...parent.childIds.filter((id) => !sharedIds.has(id))]
   desired.forEach((id, index) => {

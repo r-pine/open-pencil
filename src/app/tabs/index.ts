@@ -2,7 +2,11 @@ import { promiseTimeout } from '@vueuse/core'
 import { shallowRef, computed, triggerRef } from 'vue'
 
 import { BUILTIN_IO_FORMATS, IORegistry } from '@open-pencil/core/io'
-import { findFigThumbnailPageId, populateFigPage } from '@open-pencil/core/io/formats/fig'
+import {
+  figThumbnailIsExpensive,
+  findFigThumbnailPageId,
+  populateFigPage
+} from '@open-pencil/core/io/formats/fig'
 import { renderThumbnail } from '@open-pencil/core/io/formats/raster'
 import { computeAllLayouts } from '@open-pencil/core/layout'
 import type { SceneGraph } from '@open-pencil/scene-graph'
@@ -250,6 +254,9 @@ async function showImportedGraph(
 
 async function cacheOpenedFigCover(path: string, store: EditorStore): Promise<void> {
   if (await loadCachedRecentFileThumbnail(path)) return
+  // The cover render decodes every image fill on the main thread. A file the size of
+  // aska-app freezes the tab right after it appears, so it keeps the thumbnail it has.
+  if (figThumbnailIsExpensive(store.graph)) return
   const coverPageId = findFigThumbnailPageId(store.graph.getPages())
   if (!coverPageId) return
   for (let attempt = 0; attempt < 240 && !store.renderer; attempt++) {
@@ -310,12 +317,32 @@ function failPreparation(
   })
 }
 
+async function joinStorageDocumentCollabRoom(
+  store: EditorStore,
+  providerId: string,
+  documentId: string,
+  archiveBytes?: number
+): Promise<void> {
+  // Dynamic import avoids a tabs ↔ collab/rooms cycle at module load.
+  // The file is already on screen. A room that fails to open must not toast or close the tab.
+  // `archiveBytes` is the opened .fig, not the layer count after first-page populate.
+  try {
+    const { ensureStorageCollabRoom } = await import('@/app/collab/storage-room')
+    const cachedSize =
+      archiveBytes ?? (await getLocalCanvasStore().getMeta(documentId))?.figSize
+    await ensureStorageCollabRoom(store, { providerId, documentId }, cachedSize)
+  } catch (error) {
+    console.warn('[Collab] Failed to join the storage room', error)
+  }
+}
+
 export async function openStorageDocumentInNewTab(document: StorageDocument): Promise<void> {
   const providerId = activeStorageProviderID.value
   const existing = findStorageTab(providerId, document.id)
   if (existing) {
     switchTab(existing.id)
     rememberRecentStorageDocument(providerId, document.id, document.name)
+    await joinStorageDocumentCollabRoom(existing.store, providerId, document.id)
     return
   }
 
@@ -376,6 +403,7 @@ export async function openStorageDocumentInNewTab(document: StorageDocument): Pr
       load
     )
     rememberRecentStorageDocument(providerId, document.id, document.name)
+    await joinStorageDocumentCollabRoom(store, providerId, document.id, bytes.byteLength)
     succeeded = true
   } catch (error) {
     if (!load.signal.aborted) {
@@ -400,6 +428,16 @@ export async function openStorageDocumentInNewTab(document: StorageDocument): Pr
     throw error
   } finally {
     if (succeeded) load.complete()
+  }
+
+  // If the deterministic room was already open in another tab, shareDocument switched
+  // there; drop this duplicate storage tab so we do not keep two copies of the same file.
+  if (created) {
+    const { roomForStore } = await import('@/app/collab/rooms')
+    if (!roomForStore(store)) {
+      const tab = getTabForStore(store)
+      if (tab) await closeTab(tab.id, 'discard')
+    }
   }
 }
 

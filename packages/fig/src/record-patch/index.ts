@@ -52,11 +52,19 @@ export interface FigArchiveRecordInfo {
 }
 
 export interface FigPatchedArchiveInput {
-  thumbnailPNG: Uint8Array
+  /** Replaces the archive thumbnail. Omit to keep the thumbnail the archive already has. */
+  thumbnailPNG?: Uint8Array
   metaJSON: string
   /** Images the archive does not hold yet. */
   images: FigImageEntry[]
 }
+
+/** 1×1 PNG used when an archive has no thumbnail to keep. */
+const FALLBACK_THUMBNAIL_PNG = Uint8Array.from([
+  137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+  0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 218, 99, 252, 255, 159, 161, 30, 0, 7,
+  130, 2, 127, 61, 200, 72, 239, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130
+])
 
 const VARIABLE_TYPES = new Set(['VARIABLE', 'VARIABLE_SET'])
 
@@ -400,6 +408,36 @@ function archiveCodec(schemaDeflated: Uint8Array) {
   return { codec: compileSchema(schema), skipper: createSchemaSkipper(schema) }
 }
 
+/**
+ * The patch's records as one Kiwi message (`nodeChanges` only). A port transfers this buffer;
+ * it cannot structured-clone the NodeChange tree, which is what makes a large save throw
+ * DataCloneError. The worker already holds this schema and decodes the buffer there.
+ * The returned array owns its buffer, so transferring it does not detach a shared view.
+ */
+export function encodeFigPatchRecords(
+  schemaDeflated: Uint8Array,
+  records: readonly NodeChange[]
+): Uint8Array {
+  const encode = archiveCodec(schemaDeflated).codec.encodeMessage
+  if (typeof encode !== 'function') throw new Error('The archive schema has no message encoder')
+  const bytes = encode({ nodeChanges: records })
+  if (!bytes) throw new Error('Encoding patch records produced nothing')
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy
+}
+
+/** `encodeFigPatchRecords` read back with the same archive schema. */
+export function decodeFigPatchRecords(
+  schemaDeflated: Uint8Array,
+  bytes: Uint8Array
+): NodeChange[] {
+  const decode = archiveCodec(schemaDeflated).codec.decodeMessage
+  if (typeof decode !== 'function') throw new Error('The archive schema has no message decoder')
+  const message = decode(bytes) as { nodeChanges?: NodeChange[] }
+  return message.nodeChanges ?? []
+}
+
 function varUint(value: number): Uint8Array {
   const bb = new ByteBuffer()
   bb.writeVarUint(value)
@@ -486,7 +524,7 @@ export function patchFigArchive(
   return writeFigArchive({
     schemaDeflated: parts.schemaDeflated,
     kiwiData,
-    thumbnailPNG: input.thumbnailPNG,
+    thumbnailPNG: input.thumbnailPNG ?? parts.thumbnailPNG ?? FALLBACK_THUMBNAIL_PNG,
     metaJSON: input.metaJSON,
     images: [
       ...parts.images.map(([name, data]) => ({ name: `images/${name}`, data })),

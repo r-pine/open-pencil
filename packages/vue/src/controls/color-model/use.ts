@@ -1,6 +1,6 @@
-import { computed, ref, toValue } from 'vue'
+import { computed, ref, toValue, watch } from 'vue'
 
-import { colorToHexRaw, okhclToRGBA, parseColor } from '@open-pencil/scene-graph/color'
+import { colorToHexRaw, okhclToRGBA, tryParseColor } from '@open-pencil/scene-graph/color'
 import type { Color } from '@open-pencil/scene-graph/primitives'
 
 import {
@@ -39,8 +39,22 @@ export const BUILT_IN_COLOR_FORMATS = ['hex', 'rgb', 'hsl', 'hsb', 'okhcl'] as c
  */
 export function useColorModel(options: UseColorModelOptions) {
   const localFormat = ref<ColorFieldFormat>(options.defaultFormat ?? 'rgb')
-  const color = computed(() => toValue(options.color))
-  const sourceOkHCL = computed(() => toValue(options.okhcl))
+  /**
+   * The color the user just chose, shown before the bound fill prop catches up.
+   * A variable or style binding keeps feeding the previous resolved color into `options.color`,
+   * so the swatch and RGB/HSL/HSB/OkHCL fields would otherwise stay on that color after an
+   * eyedropper sample even though the canvas fill already changed.
+   */
+  const preview = ref<Color | null>(null)
+  let acceptingPreviewEcho = false
+  const sourceColor = computed(() => toValue(options.color))
+  const color = computed(() => preview.value ?? sourceColor.value)
+  const sourceOkHCL = computed(() => {
+    // While a sample is pinned, channels come from that RGBA. The stored OkHCL still
+    // describes the previous variable or style color.
+    if (preview.value) return undefined
+    return toValue(options.okhcl)
+  })
   const value = computed(() => createColorModelValue(color.value, sourceOkHCL.value))
   const format = computed(() => toValue(options.format) ?? localFormat.value)
   const hex = computed(() => colorToHexRaw(color.value))
@@ -49,13 +63,36 @@ export function useColorModel(options: UseColorModelOptions) {
   const okhclSliderPreview = computed(() => createOkHCLSliderPreviewModel(value.value.okhcl))
   const okhclSliderGradient = computed(() => createOkHCLSliderGradientModel(value.value.okhcl))
 
+  watch(sourceColor, (next, prev) => {
+    const shown = preview.value
+    if (!shown) return
+    if (colorsEqual(shown, next)) {
+      preview.value = null
+      return
+    }
+    // A new object with the same channels is still the bound color the sample replaced.
+    if (!prev || colorsEqual(prev, next)) return
+    // Undo or another edit replaced the sample. Keep the preview through the echo of this edit.
+    if (!acceptingPreviewEcho) preview.value = null
+  })
+
   function emitColor(nextColor: Color): Color {
-    if (!colorsEqual(color.value, nextColor)) options.onUpdate?.(nextColor)
+    if (colorsEqual(color.value, nextColor)) return nextColor
+    preview.value = nextColor
+    acceptingPreviewEcho = true
+    try {
+      options.onUpdate?.(nextColor)
+    } finally {
+      acceptingPreviewEcho = false
+    }
     return nextColor
   }
 
   function updateHex(input: string) {
-    const parsed = parseColor(input.startsWith('#') ? input : `#${input}`)
+    const raw = input.trim()
+    const parsed = tryParseColor(raw.startsWith('#') ? raw : `#${raw}`)
+    // Reject invalid input instead of falling back to black (EyeDropper / hex field).
+    if (!parsed) return color.value
     return emitColor({ ...parsed, a: color.value.a })
   }
 

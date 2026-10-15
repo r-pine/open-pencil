@@ -220,6 +220,7 @@ export type AIProviderID =
   | 'openai-compatible'
   | 'zai'
   | 'minimax'
+  | 'cursor'
   | 'anthropic-compatible'
   | 'harness:pi'
   | `acp:${ACPAgentID}`
@@ -452,6 +453,15 @@ export const AI_PROVIDERS: AIProviderDef[] = [
       { id: 'MiniMax-M2.1-highspeed', name: 'MiniMax-M2.1 Highspeed', tag: 'Fast' },
       { id: 'MiniMax-M2', name: 'MiniMax-M2' }
     ]
+  },
+  {
+    id: 'cursor',
+    name: 'Cursor',
+    keyPlaceholder: 'eyJ…',
+    keyURL: '',
+    defaultModel: '',
+    supportsCustomModel: true,
+    models: []
   },
   {
     id: 'openai-compatible',

@@ -10,6 +10,7 @@ import * as v from 'valibot'
 import type { SceneNode } from '@open-pencil/scene-graph'
 
 import type { FigmaAPI, FigmaNodeProxy } from '#core/figma-api'
+import { coerceNodeIdArgs, toolInputExpectsId } from '#core/tools/input'
 
 export type ToolCapability =
   | 'document:read'
@@ -74,13 +75,16 @@ export function defineTool<P extends v.ObjectEntries, R>(
  * tool and lists each problem with its argument, as `v.summarize` formats them. MCP clients get
  * the MCP SDK's own report, which validates the same schema before the handler runs. Inputs are
  * strict objects, so a misspelled or mis-nested argument fails here instead of being dropped.
+ * Node tools also accept the id spellings models actually send (`nodeId`, `node_id`, `ID`) and
+ * copy them onto `id` before that check.
  */
 export function parseToolArgs<S extends v.GenericSchema>(
   name: string,
   schema: S,
   args: unknown
 ): v.InferOutput<S> {
-  const result = v.safeParse(schema, args)
+  const normalized = toolInputExpectsId(schema) ? coerceNodeIdArgs(args) : args
+  const result = v.safeParse(schema, normalized)
   if (result.success) return result.output
   throw new Error(`Invalid arguments for ${name}:\n${v.summarize(result.issues)}`)
 }

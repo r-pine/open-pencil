@@ -10,6 +10,7 @@ import type { JSONValue, ToolResultPart, ToolSet, tool as createTool } from 'ai'
 
 import type { FigmaAPI } from '#core/figma-api'
 
+import { coerceNodeIdArgs, toolInputExpectsId } from './input'
 import { isToolExposed, type ToolDef } from './schema'
 
 export interface ToolLogEntry {
@@ -164,6 +165,19 @@ function isImageOutput(
   )
 }
 
+/**
+ * The AI SDK treats a Standard Schema result that still has `value` as success. Valibot's failure
+ * result includes the fields that did parse and drops unknown keys, so `{ nodeId, depth }` becomes
+ * `{ depth }` and `get_node` then reports that `id` is missing. Rewrite id aliases before that parse.
+ */
+function toolInputSchema(schema: ToolDef['input']) {
+  const standard = toStandardJSONSchema(schema)
+  if (!toolInputExpectsId(schema)) return standard
+  const validate = standard['~standard'].validate.bind(standard['~standard'])
+  standard['~standard'].validate = (value) => validate(coerceNodeIdArgs(value))
+  return standard
+}
+
 export function toolsToAI(
   tools: ToolDef[],
   options: AIAdapterOptions,
@@ -178,7 +192,7 @@ export function toolsToAI(
     if (!isToolExposed(def, 'ai')) continue
     const toolOpts: Record<string, unknown> = {
       description: def.description,
-      inputSchema: toStandardJSONSchema(def.input),
+      inputSchema: toolInputSchema(def.input),
       execute: async (args: Record<string, unknown>, { toolCallId }: { toolCallId: string }) => {
         const startTime = Date.now()
         const figma = options.getFigma()

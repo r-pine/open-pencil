@@ -4,6 +4,7 @@ import {
   clearInstanceOverrides,
   getInstanceOverride,
   hasInstanceOverride as hasNodeInstanceOverride,
+  normalizeNodeInstanceOverrides,
   setInstanceOverride
 } from './instance-overrides'
 import { keepOwnContentSize } from './instances/content-size'
@@ -184,8 +185,9 @@ function syncInstancesOf(
   try {
     groupCopyRemovals(graph, (removals) => {
       for (const instance of instances) {
+        const overrides = normalizeNodeInstanceOverrides(instance)
         const enclosing = enclosingInstanceOverrideFields(graph, instance)
-        enclosing.push(new Set(instance.instanceOverrides.self.keys()))
+        enclosing.push(new Set(overrides.self.keys()))
         const protectedField = bindingProtection(enclosing)
         const source = sourceInTargetCoordinates(component, instance.componentScale)
         const updates: Partial<SceneNode> = {}

@@ -1,6 +1,7 @@
 import {
   getInstanceOverride,
   INSTANCE_SYNC_FIELDS,
+  normalizeNodeInstanceOverrides,
   type SceneGraph,
   type SceneNode
 } from '@open-pencil/scene-graph'
@@ -49,10 +50,9 @@ export function reconcileLiveComponentEdits(
       const owners = owningInstances(graph, target)
       const protectedFields = new Set<string>()
       for (const owner of owners) {
+        const overrides = normalizeNodeInstanceOverrides(owner)
         const fields =
-          owner.id === target.id
-            ? owner.instanceOverrides.self
-            : owner.instanceOverrides.descendants.get(target.id)
+          owner.id === target.id ? overrides.self : overrides.descendants.get(target.id)
         for (const field of fields?.keys() ?? []) protectedFields.add(field)
       }
       const updates: Partial<SceneNode> = {}

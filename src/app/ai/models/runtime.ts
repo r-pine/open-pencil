@@ -2,6 +2,7 @@ import type { LanguageModel } from 'ai'
 import { ref } from 'vue'
 
 import { createLanguageModel } from '@/app/ai/chat/model'
+import { clearCursorSession, resolveCursorAccessToken } from '@/app/ai/providers/cursor/session'
 import { modelConnection, resolveAIModelRole } from '@/app/ai/models/store'
 import type { AIModelConnection, AIModelRole, ResolvedAIModelRole } from '@/app/ai/models/types'
 import { appCredentialServices } from '@/app/settings/credentials/app'
@@ -51,7 +52,10 @@ export async function setModelConnectionAPIKey(connectionId: string, value: stri
   const key = value.trim()
   try {
     if (key) await appCredentialServices.manager.set(reference, key)
-    else await appCredentialServices.manager.clear(reference)
+    else {
+      await appCredentialServices.manager.clear(reference)
+      if (connection.providerID === 'cursor') await clearCursorSession(connection)
+    }
   } finally {
     modelCredentialRevision.value++
   }
@@ -86,7 +90,10 @@ export async function createAIModelRuntime(role: AIModelRole): Promise<AIModelRu
     return { kind: 'acp', role: resolved }
   }
 
-  const apiKey = await resolveModelConnectionAPIKey(resolved.connection.id)
+  const apiKey =
+    resolved.connection.providerID === 'cursor'
+      ? await resolveCursorAccessToken(resolved.connection)
+      : await resolveModelConnectionAPIKey(resolved.connection.id)
   if (!apiKey) throw new Error(`Credential is unavailable for the ${role} model role`)
   return {
     kind: 'direct',

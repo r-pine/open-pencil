@@ -1,3 +1,5 @@
+import { isEqual } from 'es-toolkit/predicate'
+
 import type { SceneGraph, SceneNode, SharedStyle, SharedStyleKind, SharedStyleType } from './index'
 
 const STYLE_REF_KEYS = {
@@ -49,12 +51,36 @@ export function getSharedStyles(graph: SceneGraph, kind: SharedStyleKind): Share
   return styles.sort((left, right) => left.name.localeCompare(right.name))
 }
 
+function styleAt(runs: SceneNode['styleRuns'], index: number) {
+  return runs.find((run) => index >= run.start && index < run.start + run.length)?.style
+}
+
+/**
+ * A text edit writes `styleRuns` instead of `fills`. That still overrides the fill style when a
+ * run's fill or its fill-style link changes, the same way a `fills` patch does.
+ */
+function styleRunsOverrideFills(node: SceneNode, runs: SceneNode['styleRuns'] | undefined): boolean {
+  if (!runs || node.type !== 'TEXT' || !node.fillStyleId) return false
+  for (let index = 0; index < node.text.length; index++) {
+    const before = styleAt(node.styleRuns, index)
+    const after = styleAt(runs, index)
+    if (!after) continue
+    if (after.fillStyleId === null && before?.fillStyleId !== null) return true
+    if (after.fills !== undefined && !isEqual(after.fills, before?.fills)) return true
+  }
+  return false
+}
+
 export function styleDetachmentChanges(
   node: SceneNode,
   changes: Partial<SceneNode>
 ): Partial<SceneNode> {
   const next = { ...changes }
-  if ('fills' in changes && !('fillStyleId' in changes) && node.fillStyleId) {
+  if (
+    !('fillStyleId' in changes) &&
+    node.fillStyleId &&
+    ('fills' in changes || styleRunsOverrideFills(node, changes.styleRuns))
+  ) {
     next.fillStyleId = null
   }
   if ('strokes' in changes && !('strokeStyleId' in changes) && node.strokeStyleId) {

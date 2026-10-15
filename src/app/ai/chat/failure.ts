@@ -1,5 +1,7 @@
 import { APICallError, StreamProviderError } from 'ai'
 
+import { CursorEventStreamStallError } from '@/app/ai/providers/cursor/event-stream'
+
 export type AIChatFailureReason =
   | 'authentication'
   | 'forbidden'
@@ -8,7 +10,9 @@ export type AIChatFailureReason =
   | 'network'
   | 'output-limit'
   | 'rate-limit'
+  | 'repeated-action'
   | 'request-failed'
+  | 'stalled'
 
 export type AIChatFailure = {
   reason: AIChatFailureReason
@@ -80,7 +84,64 @@ function statusFailureReason(status: number | null): AIChatFailureReason | null 
   return null
 }
 
+const CURSOR_STALL_TEXT = 'cursor stopped sending a reply'
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message
+  return typeof error === 'string' ? error : ''
+}
+
+/** A Cursor reply that stopped, whether the bridge said so or the event stream went quiet. */
+export function isCursorReplyStall(error: unknown): boolean {
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  while (current != null && typeof current === 'object' && !seen.has(current)) {
+    if (current instanceof CursorEventStreamStallError) return true
+    const text = errorMessage(current).toLowerCase()
+    if (text.includes(CURSOR_STALL_TEXT) || text.includes('cursor event stream sent no data')) {
+      return true
+    }
+    seen.add(current)
+    current = (current as { cause?: unknown }).cause
+  }
+  const text = errorMessage(error).toLowerCase()
+  return text.includes(CURSOR_STALL_TEXT) || text.includes('cursor event stream sent no data')
+}
+
+/** Retries must not run again after Cursor has already stopped the reply. */
+export function finalizeStallError(error: unknown): unknown {
+  if (!isCursorReplyStall(error)) return error
+  if (APICallError.isInstance(error)) {
+    if (!error.isRetryable) return error
+    return new APICallError({
+      message: error.message,
+      url: error.url,
+      requestBodyValues: error.requestBodyValues,
+      statusCode: error.statusCode,
+      responseHeaders: error.responseHeaders,
+      responseBody: error.responseBody,
+      cause: error,
+      isRetryable: false,
+      data: error.data
+    })
+  }
+  if (StreamProviderError.isInstance(error)) {
+    if (!error.isRetryable) return error
+    return new StreamProviderError({
+      message: error.message,
+      type: error.type,
+      code: error.code,
+      statusCode: error.statusCode,
+      isRetryable: false,
+      data: error.data,
+      cause: error
+    })
+  }
+  return error
+}
+
 function failureReason(error: unknown): AIChatFailureReason {
+  if (isCursorReplyStall(error)) return 'stalled'
   const statusReason = statusFailureReason(providerErrorStatus(error))
   if (statusReason) return statusReason
   if (isInsufficientCreditError(error)) return 'insufficient-credit'

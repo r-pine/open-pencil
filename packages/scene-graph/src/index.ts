@@ -63,8 +63,10 @@ export {
 export {
   clearInstanceOverrides,
   cloneInstanceOverrideState,
+  ensureInstanceOverrideState,
   forEachInstanceOverride,
   getInstanceOverride,
+  normalizeNodeInstanceOverrides,
   setInstanceOverride,
   type InstanceOverrideState
 } from './instance-overrides'

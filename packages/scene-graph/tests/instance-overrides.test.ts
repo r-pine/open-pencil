@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 
+import { SceneGraph } from '../src'
 import {
   clearInstanceOverrides,
   cloneInstanceOverrideState,
   createInstanceOverrideState,
   deleteInstanceOverride,
   deserializeInstanceOverrideState,
+  ensureInstanceOverrideState,
   getInstanceOverride,
   hasInstanceOverride,
   serializeInstanceOverrideState,
@@ -53,6 +55,47 @@ describe('instance override state', () => {
     setInstanceOverride(state, 'instance', 'child', 'text')
     expect(deleteInstanceOverride(state, 'instance', 'child', 'text')).toBe(true)
     expect(state.descendants.has('child')).toBe(false)
+  })
+
+  test('accepts plain objects and keeps an existing map', () => {
+    const plain = ensureInstanceOverrideState({
+      self: { opacity: 0.4 },
+      descendants: { child: { text: 'Custom' } }
+    })
+    expect(plain.self).toBeInstanceOf(Map)
+    expect(plain.descendants).toBeInstanceOf(Map)
+    expect(getInstanceOverride(plain, 'instance', 'instance', 'opacity')).toBe(0.4)
+    expect(getInstanceOverride(plain, 'instance', 'child', 'text')).toBe('Custom')
+
+    const ready = createInstanceOverrideState()
+    expect(ensureInstanceOverrideState(ready)).toBe(ready)
+  })
+
+  test('syncInstances reads a plain-object self map', () => {
+    const graph = new SceneGraph()
+    const page = graph.getPages()[0]
+    if (!page) throw new Error('missing page')
+    const component = graph.createNode('COMPONENT', page.id, {
+      name: 'Card',
+      width: 40,
+      height: 20,
+      opacity: 1
+    })
+    const instance = graph.createInstance(component.id, page.id)
+    if (!instance) throw new Error('missing instance')
+    instance.instanceOverrides = {
+      self: { opacity: 0.4 },
+      descendants: {}
+    } as typeof instance.instanceOverrides
+    graph.updateNode(component.id, { opacity: 0.2 })
+
+    graph.syncInstances(component.id)
+
+    expect(instance.instanceOverrides.self).toBeInstanceOf(Map)
+    expect(
+      getInstanceOverride(instance.instanceOverrides, instance.id, instance.id, 'opacity')
+    ).toBe(0.4)
+    expect(instance.opacity).toBe(1)
   })
 
   test('clones independently and clears', () => {

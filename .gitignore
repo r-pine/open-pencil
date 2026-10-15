@@ -20,6 +20,8 @@ lerna-debug.log*
 .env
 .env.*
 !.env.example
+.envs/*
+!.envs/*.example
 *.local
 Caddyfile.dev
 
@@ -96,3 +98,9 @@ scratch/
 # Feedback Worker local state and secrets
 packages/feedback/.wrangler/
 packages/feedback/.dev.vars
+
+# MinIO object storage data
+s3-data/
+
+# Vendored MinIO binaries for local image build
+.minio-bin/

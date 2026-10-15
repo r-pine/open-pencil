@@ -447,7 +447,8 @@ export async function writePatchedFigFile(
   )
   const archivedImages = new Set(info.imageHashes.map((hash) => `images/${hash}`))
   return archive.patch(built.patch, {
-    thumbnailPNG: extras.thumbnailPNG,
+    // A skipped thumbnail leaves the one already in the archive, including after an OOM.
+    ...(extras.thumbnailSkipped ? {} : { thumbnailPNG: extras.thumbnailPNG }),
     metaJSON: extras.metaJSON,
     images: extras.images.filter((image) => !archivedImages.has(image.name))
   })

@@ -13,8 +13,24 @@ import {
 
 type NodeUpdate = (id: string, changes: Partial<SceneNode>) => void
 
+const FILL_COLOR_BINDING = /^fills\/\d+\/color$/
+
 function styleKeys(changes: Partial<SceneNode>): TextStyleKey[] {
   return TEXT_STYLE_KEYS.filter((key) => Object.hasOwn(changes, key))
+}
+
+/** Drop fill-color variables overridden by a direct color, so the panel stops resolving them. */
+function withoutFillColorBindings(node: SceneNode): Partial<SceneNode> {
+  const boundVariables = { ...node.boundVariables }
+  const variableBindingScales = { ...node.variableBindingScales }
+  let removed = false
+  for (const key of Object.keys(boundVariables)) {
+    if (!FILL_COLOR_BINDING.test(key)) continue
+    delete boundVariables[key]
+    delete variableBindingScales[key]
+    removed = true
+  }
+  return removed ? { boundVariables, variableBindingScales } : {}
 }
 
 /**
@@ -49,7 +65,19 @@ export function createTextSelectionStyle(
     const keys = styleKeys(changes)
     if (!range || !node || keys.length === 0 || Object.hasOwn(changes, 'textStyleId')) return null
     const patch = pick(changes, keys) as CharacterStyleOverride
-    return { ...omit(changes, keys), styleRuns: styleRunsWithPatch(node, ...range, patch) }
+    const styleRuns = styleRunsWithPatch(node, ...range, patch)
+    // A range that is the whole text is the layer's fill. Keep `fills` so the panel, not only
+    // the runs, shows the color after editing ends. A partial range stays on style runs.
+    const coversText = range[0] === 0 && range[1] >= node.text.length
+    const omitted = coversText ? keys.filter((key) => key !== 'fills') : keys
+    const next: Partial<SceneNode> = { ...omit(changes, omitted), styleRuns }
+    // `fills` on a partial range never reaches the layer, so shared-style detachment does not
+    // clear fillStyleId and the style pill stays. Leave the style, and any fills/N/color binding.
+    if (keys.includes('fills')) {
+      next.fillStyleId = null
+      Object.assign(next, withoutFillColorBindings(node))
+    }
+    return next
   }
 
   /** A change shown before it is committed, such as a dragged field. */

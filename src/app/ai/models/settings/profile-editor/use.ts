@@ -9,6 +9,7 @@ import { refreshAIProviderStatus } from '@/app/ai/chat/storage'
 import {
   canRemoveModelProfile,
   createModelProfileDraft,
+  modelConnection,
   modelConnectionUsageCount,
   modelProfile,
   removeModelProfile,
@@ -16,6 +17,7 @@ import {
   setModelConnectionAPIKey
 } from '@/app/ai/models'
 import type { ModelPickerLabels } from '@/app/ai/models/picker/options'
+import { clearCursorSession, writeCursorSession, type CursorSession } from '@/app/ai/providers/cursor/session'
 import type { SettingsSaveResult } from '@/app/settings/save-result'
 
 import { useProfileConnection } from './connection'
@@ -25,9 +27,15 @@ interface ProfileEditorOptions {
   profileId?: string
   keyInput: Ref<string>
   labels: Readonly<Ref<ModelPickerLabels & { customModel: string }>>
+  cursorSession?: Ref<CursorSession | null>
 }
 
-export function useModelProfileEditor({ profileId, keyInput, labels: ai }: ProfileEditorOptions) {
+export function useModelProfileEditor({
+  profileId,
+  keyInput,
+  labels: ai,
+  cursorSession
+}: ProfileEditorOptions) {
   const draft = reactive(createModelProfileDraft(profileId))
 
   const selection = useProfileModelSelection(draft, ai)
@@ -108,9 +116,17 @@ export function useModelProfileEditor({ profileId, keyInput, labels: ai }: Profi
       draft.profileId = profile.id
       draft.sourceConnectionId = profile.connectionId
       if (keyInput.value.trim() || keyCleared.value) {
+        const session = cursorSession?.value ?? null
+        const cleared = keyCleared.value
         await setModelConnectionAPIKey(profile.connectionId, keyInput.value)
+        if (draft.providerID === 'cursor') {
+          const connection = modelConnection(profile.connectionId)
+          if (connection && !cleared && session) await writeCursorSession(connection, session)
+          else if (connection) await clearCursorSession(connection)
+        }
         await refreshAIProviderStatus()
         keyInput.value = ''
+        if (cursorSession) cursorSession.value = null
       }
       saveResult.value = 'saved'
       return 'saved'
@@ -175,6 +191,7 @@ export function useModelProfileEditor({ profileId, keyInput, labels: ai }: Profi
     saveError,
     saveResult,
     updateProvider,
+    setCursorModels: selection.setCursorModels,
     updateModel,
     save,
     clearKey,
