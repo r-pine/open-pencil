@@ -3,7 +3,7 @@ import { useObjectUrl } from '@vueuse/core'
 import { shallowRef, watch } from 'vue'
 
 import type { Editor } from '@open-pencil/core/editor'
-import { renderNodesToImage } from '@open-pencil/core/io'
+import { findPageId, renderNodesToImage } from '@open-pencil/core/io'
 
 import type { ReferencedNode } from '@/app/ai/chat/context'
 
@@ -18,16 +18,19 @@ watch(
     const request = ++requestId
     const renderer = editor.renderer
     const liveNode = editor.graph.getNode(node.id)
-    if (!renderer || !liveNode) return
+    const pageId = findPageId(editor.graph, node.id)
+    if (!renderer || !liveNode || !pageId) return
     const maxDimension = Math.max(liveNode.width, liveNode.height, 1)
-    const data = await renderNodesToImage(
-      renderer.ck,
-      renderer,
-      editor.graph,
-      editor.state.currentPageId,
-      [node.id],
-      { scale: 40 / maxDimension, format: 'PNG' }
-    )
+    let data: Uint8Array | null
+    try {
+      data = renderNodesToImage(renderer.ck, renderer, editor.graph, pageId, [node.id], {
+        scale: 40 / maxDimension,
+        format: 'PNG'
+      })
+    } catch (error) {
+      console.warn('[Chat] Could not preview a referenced layer:', error)
+      return
+    }
     if (request === requestId) blob.value = data ? new Blob([data], { type: 'image/png' }) : null
   },
   { immediate: true }
