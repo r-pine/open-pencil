@@ -21,7 +21,7 @@ export const listPages = defineTool({
 export const switchPage = defineTool({
   name: 'switch_page',
 
-  description: 'Switch to a different page by name or ID.',
+  description: 'Switch to a page by the exact name or ID from list_pages.',
   execution: { kind: 'sync', mutation: 'view' },
   input: v.strictObject({
     page: v.pipe(v.string(), v.description('Page name or ID'))

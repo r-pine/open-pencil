@@ -156,16 +156,53 @@ function getRunState(store?: EditorStore): RunState {
   return created
 }
 
+/** A page whose exact name appears in `text`. The longest name wins, so a shorter neighbor does not. */
+export function pageIdNamedInText(
+  pages: readonly { id: string; name: string }[],
+  text: string
+): string | undefined {
+  let match: { id: string; name: string } | undefined
+  for (const page of pages) {
+    if (page.name.length === 0 || !textIncludesName(text, page.name)) continue
+    if (!match || page.name.length > match.name.length) match = page
+  }
+  return match?.id
+}
+
+function textIncludesName(text: string, name: string): boolean {
+  let from = 0
+  while (from < text.length) {
+    const at = text.indexOf(name, from)
+    if (at < 0) return false
+    const before = at === 0 ? '' : text.charAt(at - 1)
+    const after = text.charAt(at + name.length)
+    if (!isNameCharacter(before) && !isNameCharacter(after)) return true
+    from = at + 1
+  }
+  return false
+}
+
+function isNameCharacter(char: string): boolean {
+  return char !== '' && /[\p{L}\p{N}]/u.test(char)
+}
+
 /**
- * Begin a run on the page the user is viewing, as a message is sent.
- * Each send, including regenerate, replaces the previous run.
+ * Begin a run as a message is sent. A page named in that message is the run's page;
+ * otherwise the page on screen is. Each send, including regenerate, replaces the previous run.
+ * The user's view stays where it is.
  */
-export function startRun(store: EditorStore, maxSteps: number, model?: string): Run {
+export function startRun(
+  store: EditorStore,
+  maxSteps: number,
+  model?: string,
+  pageId?: string
+): Run {
   const state = getRunState(store)
-  const pageId = store.state.currentPageId
-  state.run = new Run(maxSteps, pageId)
+  const named = pageId && store.graph.getNode(pageId)?.type === 'CANVAS' ? pageId : undefined
+  const target = named ?? store.state.currentPageId
+  state.run = new Run(maxSteps, target)
   state.agent ??= addAgent(store, 'chat', model)
-  state.agent.update({ status: 'thinking', model, pageId })
+  state.agent.update({ status: 'thinking', model, pageId: target })
   return state.run
 }
 

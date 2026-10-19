@@ -100,18 +100,16 @@ test('a page load that finds the graph diverged leaves the worker writing the ar
   }
 }, 20000)
 
-test('an abandoned page load stops the worker, and the archive is written without it', async () => {
+test('an abandoned page load keeps the worker, and a later load still opens the page', async () => {
   const opened = await openViaWorker()
   try {
+    const worker = createFigPopulationWorker(opened)
     const controller = new AbortController()
-    const loading = createFigPopulationWorker(opened)?.populate(
-      opened.getPages()[2].id,
-      controller.signal
-    )
+    const loading = worker?.populate(opened.getPages()[2].id, controller.signal)
     controller.abort()
     await expect(loading).rejects.toThrow('Aborted')
-    edit(opened)
-    expect(names(await exportFigFile(opened))).toContain('Edited again')
+    expect(await worker?.populateFromArchive(opened.getPages()[2].id)).toBe(true)
+    expect(opened.getChildren(opened.getPages()[2].id)[0]?.text).toBe('Third')
   } finally {
     releaseFigPopulationWorker(opened)
   }

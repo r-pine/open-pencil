@@ -9,5 +9,9 @@ export function useSpaceHeld() {
   useEventListener(window, 'keyup', (event: KeyboardEvent) => {
     if (event.code === 'Space') spaceHeld.value = false
   })
+  // Leaving the window can drop the keyup, which would leave wheel zoom stuck on.
+  useEventListener(window, 'blur', () => {
+    spaceHeld.value = false
+  })
   return spaceHeld
 }

@@ -30,6 +30,7 @@ import { createAIModelRuntime, resolveModelConnectionAPIKey } from '@/app/ai/mod
 import type { ThinkingLevel } from '@/app/ai/models/types'
 import { createRunPreview } from '@/app/ai/preview/run'
 import { createAITools, currentRun, endRun, recordStep, startRun } from '@/app/ai/tools'
+import { pageIdNamedInText } from '@/app/ai/tools/run'
 import { enabledAIToolDefinitions } from '@/app/ai/tools/catalog'
 import { aiToolOverrides } from '@/app/ai/tools/preferences'
 import { restAgents } from '@/app/automation/agents'
@@ -99,6 +100,18 @@ function mergeProviderOptions(
 
 function offeredToolNames(): string[] {
   return enabledAIToolDefinitions(aiToolOverrides.value).map((tool) => tool.name)
+}
+
+function lastUserText(messages: readonly UIMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.role !== 'user') continue
+    return message.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('')
+  }
+  return ''
 }
 
 function callSettings(
@@ -230,7 +243,13 @@ export function createToolLoopTransport({
     reconnectToStream: (options) => transport.reconnectToStream(options),
     async sendMessages(options) {
       // The run starts as the message is sent, so a Stop before the model is reached ends it.
-      const started = startRun(store, maxAgentSteps.value, effectiveModelID)
+      // A page named in the message is the target. The page on screen stays the user's.
+      const started = startRun(
+        store,
+        maxAgentSteps.value,
+        effectiveModelID,
+        pageIdNamedInText(store.graph.getPages(), lastUserText(options.messages))
+      )
       run = started
       const { sessionId, runId } = diagnosticContext
       const startedRecording =

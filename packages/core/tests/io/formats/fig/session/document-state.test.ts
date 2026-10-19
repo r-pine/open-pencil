@@ -104,3 +104,32 @@ test('page preparation recovers an invalidated replacement worker without replac
   }
   expect(() => recoverReaderPage(graph, graph.getPages()[2].id)).toThrow('No reader recovery state')
 })
+
+test('an edit on a large archive still switches to a page that is already loaded', async () => {
+  await initCodec()
+  const source = new SceneGraph()
+  source.createNode('RECTANGLE', source.getPages()[0].id, { name: 'First' })
+  source.createNode('RECTANGLE', source.addPage('Second').id, { name: 'Second node' })
+  source.addPage('Third')
+  const bytes = await exportFigFile(source)
+  const backend = openReaderSession(bytes.buffer as ArrayBuffer, 'first-page')
+  const graph = deserializeSceneGraph(serializeSceneGraph(backend.graph))
+  const checkpoint = structuredClone(backend.checkpoint())
+  const large = new ArrayBuffer(3 * 1024 * 1024)
+  new Uint8Array(large).set(new Uint8Array(bytes.buffer as ArrayBuffer))
+  registerReaderRecovery(graph, large, checkpoint)
+  const secondResult = backend.populate(graph.getPages()[1].id)
+  applyFigPopulationDelta(graph, structuredClone(secondResult.delta))
+  if (!secondResult.checkpoint) throw new Error('Missing checkpoint')
+  updateReaderRecovery(graph, structuredClone(secondResult.checkpoint))
+  registerFigPopulationWorker(graph, inertPopulationWorker())
+  const editor = createEditor({ graph, skipInitialGraphSetup: true })
+  graph.updateNode(graph.getChildren(graph.getPages()[0].id)[0].id, { width: 80 })
+  try {
+    await editor.switchPage(graph.getPages()[1].id)
+    expect(editor.state.currentPageId).toBe(graph.getPages()[1].id)
+    expect(graph.getChildren(graph.getPages()[2].id)).toHaveLength(0)
+  } finally {
+    releaseFigPopulationWorker(graph)
+  }
+})

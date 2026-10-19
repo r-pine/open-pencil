@@ -523,7 +523,7 @@ export function useCanvasInput(
     cancelPointerInteraction()
   })
 
-  setupPanZoom(canvasRef, editor, drag, onMouseDown, onMouseMove, onMouseUp)
+  setupPanZoom(canvasRef, editor, drag, onMouseDown, onMouseMove, onMouseUp, spaceHeld)
   return {
     drag,
     cursorOverride,

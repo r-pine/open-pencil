@@ -186,7 +186,9 @@ export function createPopulationWorkerClient(
     // Layout recomputation (import-time or after a switch) is derived from the
     // same scene graph the worker deltas were built from; it must not count as
     // user divergence. Only real user edits invalidate the worker.
-    if (applyingDelta || graph.isApplyingLayout) return
+    // A resize lays the frame out afterwards. Those writes are derived, and counting
+    // each one rejects the page load the user starts while the layout is still walking.
+    if (applyingDelta || graph.isApplyingLayout || graph.isApplyingDerivedLayout) return
     // Keep counting after the first edit. A page load already in flight must see
     // a later edit and drop its delta, instead of writing the file over it.
     revision++
@@ -201,7 +203,8 @@ export function createPopulationWorkerClient(
   }
   /**
    * Stop loading pages here. A graph that diverged only retires the worker's session, so the
-   * worker keeps serving the archive; an abandoned or failed load stops the worker itself.
+   * worker keeps serving the archive. A dead worker stops itself. An aborted click does not:
+   * the next page still has to load from this same session.
    */
   const fail = (emit = true, stop = true) => {
     stale = true
@@ -287,16 +290,29 @@ export function createPopulationWorkerClient(
       const requestId = randomHex()
       const baseRevision = revision
       return new Promise((resolve, reject) => {
-        const abort = () => {
+        if (signal?.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'))
+          return
+        }
+        // A second click aborts this load, and a slow page hits the timeout. Either one
+        // finishes this request only. Killing the shared worker here is what made every
+        // later unloaded page unopenable on a large file.
+        const drop = () => {
           const request = pending.get(requestId)
           if (!request) return
           clearTimeout(request.timeout)
+          request.abort?.()
           pending.delete(requestId)
-          fail(false)
+          return request
+        }
+        const abort = () => {
+          if (!drop()) return
           reject(new DOMException('Aborted', 'AbortError'))
         }
         signal?.addEventListener('abort', abort, { once: true })
-        const timeout = setTimeout(() => fail(), FIG_POPULATION_WORKER_TIMEOUT_MS)
+        const timeout = setTimeout(() => {
+          drop()?.resolve(null)
+        }, FIG_POPULATION_WORKER_TIMEOUT_MS)
         pending.set(requestId, {
           resolve,
           abort: () => signal?.removeEventListener('abort', abort),

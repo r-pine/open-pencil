@@ -9,6 +9,7 @@ import { FigmaAPI } from '@open-pencil/core/figma-api'
 
 import { createToolLoopTransport } from '@/app/ai/chat/transports'
 import { currentRun, endRun, markRunPreview, runPageId, startRun } from '@/app/ai/tools'
+import { pageIdNamedInText } from '@/app/ai/tools/run'
 import { aiToolOverrides } from '@/app/ai/tools/preferences'
 import { markRunWork, runUndoEntries } from '@/app/ai/tools/run'
 import * as figmaFactory from '@/app/automation/bridge/figma-factory'
@@ -27,7 +28,7 @@ type StreamChunk =
 type Step = { toolName: string; input: unknown } | ((store: EditorStore) => Promise<void>)
 
 /** Run one message whose model calls `steps` in order: a tool call, or a user action first. */
-async function runMessage(store: EditorStore, steps: Step[]) {
+async function runMessage(store: EditorStore, steps: Step[], text = 'Draw') {
   let call = 0
   const model = new MockLanguageModelV4({
     doStream: async () => {
@@ -79,7 +80,7 @@ async function runMessage(store: EditorStore, steps: Step[]) {
     chatId: 'run-page',
     messageId: undefined,
     abortSignal: undefined,
-    messages: [{ id: 'user', role: 'user', parts: [{ type: 'text', text: 'Draw' }] }]
+    messages: [{ id: 'user', role: 'user', parts: [{ type: 'text', text }] }]
   })
   const reader = stream.getReader()
   try {
@@ -133,6 +134,37 @@ test("an edit that changes nothing adds no undo step and does not claim an earli
     expect(store.undo.peekUndo()).toBe(deleted)
     expect(runUndoEntries(store)).toEqual([])
   })
+})
+
+test('a page named in the message is the run page, and the view stays', async () => {
+  await withStore(async (store, { a, b }) => {
+    store.graph.updateNode(a, { name: '02 Иконки' })
+    store.graph.updateNode(b, { name: '00 Обложка' })
+    const shorter = store.graph.addPage('Обложка').id
+    appPreferences.value.chat.followAgents = false
+    const named = pageIdNamedInText(
+      store.graph.getPages(),
+      'сделай шапку на 00 Обложка'
+    )
+    expect(named).toBe(b)
+    expect(named).not.toBe(shorter)
+    await runMessage(store, [rectangle], 'сделай шапку на 00 Обложка')
+
+    expect(store.state.currentPageId).toBe(a)
+    expect(runPageId(store)).toBe(b)
+    expect(store.graph.getChildren(b)).toHaveLength(1)
+    expect(store.graph.getChildren(a)).toHaveLength(0)
+  })
+})
+
+test('a message without a page name keeps the page on screen', async () => {
+  const pages = [
+    { id: 'cover', name: '00 Обложка' },
+    { id: 'icons', name: '02 Иконки' }
+  ]
+  expect(pageIdNamedInText(pages, 'сделай шапку на 00 Обложка')).toBe('cover')
+  expect(pageIdNamedInText(pages, 'поправь градиент')).toBeUndefined()
+  expect(pageIdNamedInText(pages, 'иконки на обложке')).toBeUndefined()
 })
 
 test('a run keeps working on its page while the user views another', async () => {

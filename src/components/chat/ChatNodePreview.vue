@@ -18,19 +18,16 @@ watch(
     const request = ++requestId
     const renderer = editor.renderer
     const liveNode = editor.graph.getNode(node.id)
-    const pageId = findPageId(editor.graph, node.id)
-    if (!renderer || !liveNode || !pageId) return
+    if (!renderer || !liveNode) return
     const maxDimension = Math.max(liveNode.width, liveNode.height, 1)
-    let data: Uint8Array | null
-    try {
-      data = renderNodesToImage(renderer.ck, renderer, editor.graph, pageId, [node.id], {
-        scale: 40 / maxDimension,
-        format: 'PNG'
-      })
-    } catch (error) {
-      console.warn('[Chat] Could not preview a referenced layer:', error)
-      return
-    }
+    const data = await renderNodesToImage(
+      renderer.ck,
+      renderer,
+      editor.graph,
+      editor.state.currentPageId,
+      [node.id],
+      { scale: 40 / maxDimension, format: 'PNG' }
+    )
     if (request === requestId) blob.value = data ? new Blob([data], { type: 'image/png' }) : null
   },
   { immediate: true }

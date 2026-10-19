@@ -169,10 +169,12 @@ export function createPageActions(ctx: EditorContext, drawing?: PageDrawing) {
       }
     }
     if (workerResult !== null) return workerResult
-    // A rejected delta left the worker in place. Retiring it would make the next
-    // click fall through to recovery, which a large archive refuses.
+    // A rejected load of a page still in the archive leaves the worker in place.
+    // Retiring it would make the next click fall through to recovery, which a large
+    // archive refuses. A page already on screen is not that load: `populate` also
+    // returns null after an edit, and the switch still has to commit.
     if (canUseFigPopulationWorker(ctx.graph) && figArchiveExceedsMainThreadRecovery(ctx.graph)) {
-      return null
+      return isReaderPagePending(ctx.graph, pageId) ? null : false
     }
     worker?.terminate()
     populationWorkerInstance = undefined

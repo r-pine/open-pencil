@@ -6,12 +6,16 @@ import { createPopulationWorkerClient } from '#core/kiwi/fig/population/client'
 import { trackArchiveChanges } from '#core/kiwi/fig/session/archive-changes'
 import type { FigSessionPopulateRequest, FigSessionResponse } from '#core/kiwi/fig/session/protocol'
 
-test('aborting a population request terminates its transport and ignores late results', async () => {
+test('aborting a population request leaves the worker up and ignores the late result', async () => {
   const graph = new SceneGraph()
+  const page = graph.getPages()[0]
   let terminated = false
+  let request: FigSessionPopulateRequest | undefined
   const port = {
     onmessage: null as ((event: MessageEvent<FigSessionResponse>) => void) | null,
-    postMessage: () => undefined,
+    postMessage: (message: FigSessionPopulateRequest) => {
+      request = message
+    },
     start: () => undefined,
     close: () => undefined
   }
@@ -25,11 +29,52 @@ test('aborting a population request terminates its transport and ignores late re
   }
   const client = createPopulationWorkerClient(graph, worker, port)
   const controller = new AbortController()
-  const pending = client.populate(graph.getPages()[0].id, controller.signal)
+  const pending = client.populate(page.id, controller.signal)
+  const abandoned = request
   controller.abort()
   await expect(pending).rejects.toThrow('Aborted')
-  expect(terminated).toBe(true)
-  expect(await client.populate(graph.getPages()[0].id)).toBeNull()
+  expect(terminated).toBe(false)
+  if (!abandoned) throw new Error('Missing request')
+  port.onmessage?.(
+    new MessageEvent<FigSessionResponse>('message', {
+      data: {
+        type: 'population-result',
+        requestId: abandoned.requestId,
+        baseRevision: abandoned.baseRevision,
+        populated: true,
+        delta: {
+          created: [],
+          updated: [[page.id, { name: 'Late' }]],
+          deleted: [],
+          instanceIndex: [],
+          populatedRootIds: [page.id]
+        }
+      }
+    })
+  )
+  expect(page.name).not.toBe('Late')
+  const again = client.populate(page.id)
+  if (!request || request === abandoned) throw new Error('Missing follow-up request')
+  port.onmessage?.(
+    new MessageEvent<FigSessionResponse>('message', {
+      data: {
+        type: 'population-result',
+        requestId: request.requestId,
+        baseRevision: request.baseRevision,
+        populated: true,
+        delta: {
+          created: [],
+          updated: [[page.id, { name: 'Loaded' }]],
+          deleted: [],
+          instanceIndex: [],
+          populatedRootIds: [page.id]
+        }
+      }
+    })
+  )
+  expect(await again).toBe(true)
+  expect(page.name).toBe('Loaded')
+  expect(terminated).toBe(false)
   client.terminate()
 })
 
@@ -197,6 +242,58 @@ test('an edit during an archive load drops that load', async () => {
     expect(await loading).toBeNull()
     expect(page.childIds).toEqual(expected)
     expect(kept.name).toBe('Again')
+  } finally {
+    client.terminate()
+  }
+})
+
+test('layout after a resize does not drop an archive load', async () => {
+  const graph = new SceneGraph()
+  const page = graph.getPages()[0]
+  const kept = graph.createNode('RECTANGLE', page.id, { name: 'Kept' })
+  trackArchiveChanges(graph)
+  let request: FigSessionPopulateRequest | undefined
+  const port = {
+    onmessage: null as ((event: MessageEvent<FigSessionResponse>) => void) | null,
+    start: () => undefined,
+    close: () => undefined,
+    postMessage(message: FigSessionPopulateRequest) {
+      request = message
+    }
+  }
+  const worker = {
+    terminate: () => undefined,
+    postMessage: () => undefined,
+    onerror: null,
+    onmessage: null
+  }
+  const client = createPopulationWorkerClient(graph, worker, port)
+  graph.updateNode(kept.id, { width: 40 })
+  try {
+    const loading = client.populateFromArchive(page.id)
+    if (!request) throw new Error('Missing request')
+    graph.applyDerivedLayoutDuring(() => {
+      graph.updateNode(kept.id, { x: 12 })
+    })
+    port.onmessage?.(
+      new MessageEvent<FigSessionResponse>('message', {
+        data: {
+          type: 'population-result',
+          requestId: request.requestId,
+          baseRevision: request.baseRevision,
+          populated: true,
+          delta: {
+            created: [],
+            updated: [[page.id, { childIds: [kept.id] }]],
+            deleted: [],
+            instanceIndex: [],
+            populatedRootIds: [page.id]
+          }
+        }
+      })
+    )
+    expect(await loading).toBe(true)
+    expect(kept.x).toBe(12)
   } finally {
     client.terminate()
   }

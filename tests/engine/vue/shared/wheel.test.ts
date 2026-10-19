@@ -51,6 +51,10 @@ describe('wheel navigation', () => {
     expect(isWheelZoom({ ctrlKey: false, metaKey: true })).toBeTrue()
     expect(isWheelZoom({ ctrlKey: false, metaKey: false })).toBeFalse()
   })
+
+  test('zooms while space is held', () => {
+    expect(isWheelZoom({ ctrlKey: false, metaKey: false, spaceHeld: true })).toBeTrue()
+  })
 })
 
 function event(deltaY: number, options: Partial<WheelInput> = {}): WheelInput {
@@ -96,6 +100,12 @@ describe('wheel steps', () => {
     expect(zoomScale(createWheelSteps('windows')(event(-4.5, { ctrlKey: true })))).toBeCloseTo(
       2 ** (4.5 / 50)
     )
+  })
+
+  test('zooms a wheel turn while space is held the way a mouse wheel zooms', () => {
+    const step = createWheelSteps('mac')
+    expect(zoomScale(step(event(10, { spaceHeld: true })))).toBeCloseTo(Math.exp(-0.05))
+    expect(step(event(4)).kind).toBe('pan')
   })
 
   test('zooms a Meta+wheel turn more gently and limits one event to 10x', () => {

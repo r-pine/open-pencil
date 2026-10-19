@@ -33,6 +33,9 @@ export function openReaderSession(
     const page = pages.find((page) => !page.internalOnly)
     if (page) session.loadPage(page.sourceId)
   }
+  // A cancelled apply never reached the main graph, but this session already loaded the page.
+  // The next ask has to send that subtree again; `loadPage` will not record it a second time.
+  const sent = new Map<string, PagePopulation>()
   return {
     session,
     /** Records skipped so far, including those of pages loaded later. */
@@ -40,21 +43,31 @@ export function openReaderSession(
     checkpoint: () => session.checkpoint(),
     graph: session.graph,
     pages,
-    populate(pageId: string) {
+    populate(pageId: string): PagePopulation {
       const sourceId = sourceByGraph.get(pageId)
       if (!sourceId) throw new Error(`Unknown graph page ${pageId}`)
+      const again = sent.get(pageId)
+      if (again) return structuredClone(again)
       const populated = !session.loadedPageIds.has(sourceId)
       const journal = installFigMutationJournal(session.graph)
       try {
         session.loadPage(sourceId)
-        return {
+        const result = {
           checkpoint: session.checkpoint(),
           populated,
           delta: buildFigPopulationDelta(session.graph, journal, loadedGraphIds())
         }
+        sent.set(pageId, structuredClone(result))
+        return result
       } finally {
         journal.stop()
       }
     }
   }
+}
+
+interface PagePopulation {
+  checkpoint: ReturnType<ReturnType<typeof createFigDocumentSession>['checkpoint']>
+  populated: boolean
+  delta: ReturnType<typeof buildFigPopulationDelta>
 }

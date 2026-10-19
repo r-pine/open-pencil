@@ -13,7 +13,8 @@ const WHEEL_DELTA_PAGE = 2
  * Wheel navigation follows Figma's, measured in Figma 126 with real trackpad recordings and its
  * own wheel handler. Every event pans twice its delta, at most 120 px. Ctrl+wheel, which is how
  * Chromium reports a touchpad pinch (deltaY = -100 ln scale), zooms by 2^(-deltaY / 50); a
- * mouse wheel zoom (Meta+wheel, or Ctrl with a Windows wheel notch) zooms by e^(-0.005 deltaY).
+ * mouse wheel zoom (Meta+wheel, Space+wheel, or Ctrl with a Windows wheel notch) zooms by
+ * e^(-0.005 deltaY). Space keeps dragging as a pan and turns the wheel into that zoom.
  */
 const PAN_SCALE = 2
 const MAX_PAN_PER_EVENT = 120
@@ -51,7 +52,7 @@ type WheelAccum = {
 }
 
 type WheelPanInput = Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMode' | 'shiftKey'>
-type WheelModifierInput = Pick<WheelEvent, 'ctrlKey' | 'metaKey'>
+type WheelModifierInput = Pick<WheelEvent, 'ctrlKey' | 'metaKey'> & { spaceHeld?: boolean }
 
 /** The wheel event fields navigation reads; `wheelDeltaX/Y` are Chromium's legacy notch fields. */
 export type WheelInput = WheelPanInput &
@@ -81,7 +82,7 @@ function normalizedWheelDelta(event: WheelPanInput): WheelPanDelta {
 }
 
 export function isWheelZoom(event: WheelModifierInput): boolean {
-  return event.ctrlKey || event.metaKey
+  return event.ctrlKey || event.metaKey || event.spaceHeld === true
 }
 
 function shiftToHorizontal(delta: WheelPanDelta, shiftKey: boolean): WheelPanDelta {
@@ -162,7 +163,11 @@ export function createWheelSteps(platform: WheelPlatform = currentWheelPlatform(
 
 const NAVIGATION_SETTLE_DELAY_MS = 120
 
-export function setupWheelPanZoom(canvasRef: Ref<HTMLCanvasElement | null>, editor: Editor) {
+export function setupWheelPanZoom(
+  canvasRef: Ref<HTMLCanvasElement | null>,
+  editor: Editor,
+  spaceHeld: Ref<boolean>
+) {
   const wheelAccum: WheelAccum = {
     deltaX: 0,
     deltaY: 0,
@@ -227,7 +232,19 @@ export function setupWheelPanZoom(canvasRef: Ref<HTMLCanvasElement | null>, edit
       trusted: event.isTrusted
     })
 
-    const step = wheelStep(event)
+    const legacy = event as WheelEvent & { wheelDeltaX?: number; wheelDeltaY?: number }
+    const step = wheelStep({
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
+      deltaMode: event.deltaMode,
+      shiftKey: event.shiftKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      timeStamp: event.timeStamp,
+      wheelDeltaX: legacy.wheelDeltaX,
+      wheelDeltaY: legacy.wheelDeltaY,
+      spaceHeld: spaceHeld.value
+    })
     editor.setNavigationPhase(step.kind, performance.now())
 
     if (step.kind === 'zoom') {
