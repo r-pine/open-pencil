@@ -15,6 +15,7 @@ import { startMCPRuntime, stopMCPRuntime } from '@/app/automation/mcp/runtime'
 import { startWebMCP } from '@/app/automation/webmcp/runtime'
 import { exposeCollaborationActions } from '@/app/browser-bridge'
 import { useJoinRoom } from '@/app/collab/join'
+import { storageDocumentForShareRoom } from '@/app/collab/storage-room'
 import { bindDesktopRoomLinks } from '@/app/collab/room/links'
 import { syncRoomRoute } from '@/app/collab/route'
 import { COLLAB_KEY, useCollab } from '@/app/collab/use'
@@ -31,11 +32,13 @@ import { useEditorMenu } from '@/app/shell/menu/use'
 import { toast } from '@/app/shell/ui'
 import {
   activeTab,
+  closeTab,
   createDocumentInCurrentTab,
   createHomeTab,
   createTab,
   getActiveStore,
   getTabsSnapshot,
+  openStorageDocumentInNewTab,
   tabCount,
   type Tab
 } from '@/app/tabs'
@@ -60,14 +63,34 @@ const shouldCreateHome = route.path === '/' && !appRuntimeConfig.test && !route.
 const { collaboration } = useI18n()
 const joinRoomFromInput = useJoinRoom()
 
-/** A share link opens its room in a tab of its own, so nothing editable shows before it. */
+/**
+ * A share link for a stored file opens that file. Joining the room first would show the
+ * room's older saved copy and then discard the stored file as a duplicate tab.
+ */
 function openFirstTab(): Tab {
   const roomId = typeof route.params.roomId === 'string' ? route.params.roomId : null
   if (roomId) {
-    if (joinRoomFromInput(roomId) && activeTab.value) return activeTab.value
-    toast.error(collaboration.value.invalidRoomLink)
+    const placeholder = createTab()
+    placeholder.store.state.documentName = collaboration.value.sharedFile
+    void openSharedRoom(roomId, placeholder.id)
+    return placeholder
   }
   return shouldCreateHome ? createHomeTab() : createTab()
+}
+
+async function openSharedRoom(roomId: string, placeholderId: string): Promise<void> {
+  try {
+    const document = await storageDocumentForShareRoom(roomId)
+    if (document) {
+      await closeTab(placeholderId, 'discard')
+      await openStorageDocumentInNewTab(document)
+      return
+    }
+  } catch (error) {
+    console.warn('[Collab] Could not open the stored file for this room', error)
+  }
+  await closeTab(placeholderId, 'discard')
+  if (!joinRoomFromInput(roomId)) toast.error(collaboration.value.invalidRoomLink)
 }
 
 // Block-scoped so the view does not keep the first tab's store after that tab closes.

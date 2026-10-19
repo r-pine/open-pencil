@@ -62,7 +62,7 @@ export class Run {
   readonly changedCalls = new Set<string>()
   /** False once the reply finished, was stopped, or failed; its agent no longer moves. */
   active = true
-  /** The model repeated one call twice, or repeated a call that failed, so the loop stops. */
+  /** Kept for the loop stop. Repeating a tool call no longer sets this. */
   repeatedAction = false
   /** Cursor stopped sending a reply. The step is not retried. */
   stalled = false
@@ -82,9 +82,8 @@ export class Run {
 
   /**
    * Records a tool call the model just requested. The first time, it may run.
-   * The first repeat of a call that already succeeded does not run again: the
-   * caller answers with the stored result. A repeat of a call that failed, and
-   * a second repeat of the same name and arguments, stop the run.
+   * A later call with the same name and arguments is not run again: the caller
+   * answers with the stored result and the run continues.
    */
   claimToolCall(name: string, args: unknown): ToolClaim {
     const key = toolCallKey(name, args)

@@ -214,7 +214,12 @@ function interpretRoot(
     ]
     const descendant: StructuralLayer[] = []
     const swapRoot = (swap: GUID): void => {
-      if (!effective) throw new Error('Swap target is not an instance')
+      if (!effective) {
+        // An override can point this instance at itself and carry no component. That is not a
+        // swap onto a component, and aborting here drops every later layer on the page.
+        if (source.guid && sameGuid(source.guid, swap)) return
+        throw new Error('Swap target is not an instance')
+      }
       if (!sameGuid(effective, swap)) replaced.push(effective)
       effective = swap
       // Later layers may address the root through the replacement's identity.

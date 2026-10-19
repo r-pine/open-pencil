@@ -3,6 +3,7 @@ import { isEqual } from 'es-toolkit/predicate'
 import type { SceneGraph, SceneNode } from '@open-pencil/scene-graph'
 
 import { yieldToMainThread } from '#core/editor/main-thread'
+import { archiveBaseline, archiveChanges } from '#core/kiwi/fig/session/archive-changes'
 
 export interface FigPopulationDelta {
   created: Array<[string, SceneNode]>
@@ -125,6 +126,33 @@ export function buildFigPopulationDelta(
 
 /** Creates applied in one turn. More than this, and the tab cannot take a click until the page lands. */
 const POPULATION_SLICE_NODES = 40
+
+/**
+ * A page loaded after an edit comes from the file, which does not contain that edit.
+ * Drop updates and deletes of layers the edit touched. A page the user renamed still
+ * receives the file's children, after the layers they added on that page.
+ */
+export function preserveLiveEdits(graph: SceneGraph, delta: FigPopulationDelta): FigPopulationDelta {
+  const summary = archiveChanges(graph)
+  if (!summary || summary.touched.size === 0) return delta
+  const touched = summary.touched
+  const userCreated = archiveBaseline(graph)?.created ?? new Set<string>()
+  const roots = new Set(delta.populatedRootIds)
+  return {
+    created: delta.created.filter(([id]) => !graph.getNode(id) && !userCreated.has(id)),
+    updated: delta.updated.flatMap(([id, fields]) => {
+      if (!touched.has(id)) return [[id, fields]]
+      const childIds = fields.childIds
+      if (!roots.has(id) || !childIds) return []
+      const live = graph.getNode(id)?.childIds ?? []
+      const extras = live.filter((childId) => !childIds.includes(childId))
+      return [[id, { childIds: [...childIds, ...extras] }]]
+    }),
+    deleted: delta.deleted.filter((id) => !touched.has(id) && !userCreated.has(id)),
+    instanceIndex: delta.instanceIndex,
+    populatedRootIds: delta.populatedRootIds
+  }
+}
 
 export function applyFigPopulationDelta(graph: SceneGraph, delta: FigPopulationDelta): void {
   graph.applyImportedStateDuring(() => {

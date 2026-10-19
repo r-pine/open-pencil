@@ -11,7 +11,6 @@ import {
   type ToolDef
 } from '@open-pencil/core/tools'
 
-import { repeatedActionError } from '@/app/ai/chat/failure'
 import { resultWithAlreadyRanNote } from '@/app/ai/chat/loop'
 import { makeFigmaFromStore } from '@/app/automation/bridge/figma-factory'
 import { executeAtomicEditorTool } from '@/app/automation/execution/editor'
@@ -162,14 +161,11 @@ export function createAITools(store: EditorStore, diagnosticContext?: AIDiagnost
       executeTool: async (def, figma, args, options) => {
         const run = currentRun(store)
         const decision = run.claimToolCall(def.name, args)
-        // A repeat is not executed. The first successful one returns the stored
-        // result so the model can continue; the next identical one stops the run.
+        // A repeat is not executed again. The stored result is returned, with a
+        // note when it succeeded, and the run continues into the next action.
         if (decision.kind === 'repeat') {
           const previous = await decision.previous
-          if (!decision.succeeded() || decision.repeat >= 2) {
-            run.repeatedAction = true
-            return { error: repeatedActionError() }
-          }
+          if (!decision.succeeded()) return previous
           return resultWithAlreadyRanNote(previous)
         }
         let result: unknown

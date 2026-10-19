@@ -25,6 +25,12 @@ const states = new WeakMap<SceneGraph, ReaderState>()
  */
 const MAIN_THREAD_FIG_RECOVERY_BYTES = 2 * 1024 * 1024
 
+/** True when rebuilding this archive on the main thread would freeze the tab. */
+export function figArchiveExceedsMainThreadRecovery(graph: SceneGraph): boolean {
+  const bytes = states.get(graph)?.bytes
+  return bytes !== undefined && bytes.byteLength > MAIN_THREAD_FIG_RECOVERY_BYTES
+}
+
 export function registerReaderRecovery(
   graph: SceneGraph,
   bytes: ArrayBuffer,

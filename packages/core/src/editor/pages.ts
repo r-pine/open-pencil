@@ -12,7 +12,11 @@ import {
   canUseFigPopulationWorker,
   createFigPopulationWorker
 } from '#core/kiwi/fig/population/client'
-import { isReaderPagePending, recoverReaderPage } from '#core/kiwi/fig/session/document-state'
+import {
+  figArchiveExceedsMainThreadRecovery,
+  isReaderPagePending,
+  recoverReaderPage
+} from '#core/kiwi/fig/session/document-state'
 import { yieldToMainThread } from '#core/editor/main-thread'
 import { computeAllLayouts, computeAllLayoutsCooperatively } from '#core/layout'
 import { fontManager } from '#core/text/fonts'
@@ -138,7 +142,7 @@ export function createPageActions(ctx: EditorContext, drawing?: PageDrawing) {
     throwIfAborted(signal)
     const worker = populationWorker()
     const workerGeneration = populationWorkerGeneration
-    const workerResult = worker ? await worker.populate(pageId, signal) : null
+    let workerResult = worker ? await worker.populate(pageId, signal) : null
     throwIfAborted(signal)
     if (
       workerGeneration !== populationWorkerGeneration ||
@@ -146,7 +150,30 @@ export function createPageActions(ctx: EditorContext, drawing?: PageDrawing) {
     ) {
       return null
     }
+    // After an edit `populate` refuses, and a large archive must not be reparsed here.
+    // The worker still holds the original file, so ask it for this one unloaded page.
+    if (
+      workerResult === null &&
+      worker &&
+      canUseFigPopulationWorker(ctx.graph) &&
+      isReaderPagePending(ctx.graph, pageId) &&
+      figArchiveExceedsMainThreadRecovery(ctx.graph)
+    ) {
+      workerResult = await worker.populateFromArchive(pageId, signal)
+      throwIfAborted(signal)
+      if (
+        workerGeneration !== populationWorkerGeneration ||
+        (switchGeneration !== null && switchGeneration !== pageSwitchGeneration)
+      ) {
+        return null
+      }
+    }
     if (workerResult !== null) return workerResult
+    // A rejected delta left the worker in place. Retiring it would make the next
+    // click fall through to recovery, which a large archive refuses.
+    if (canUseFigPopulationWorker(ctx.graph) && figArchiveExceedsMainThreadRecovery(ctx.graph)) {
+      return null
+    }
     worker?.terminate()
     populationWorkerInstance = undefined
     if (isReaderPagePending(ctx.graph, pageId)) {

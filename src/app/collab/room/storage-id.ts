@@ -28,8 +28,9 @@ export function storageCollabFingerprint(parts: {
 export function normalizeStorageEndpoint(endpoint: string): string {
   const trimmed = endpoint.trim().replace(/\/+$/, '')
   if (!trimmed) return ''
+  const lower = trimmed.toLowerCase()
   const withScheme =
-    trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : `https://${trimmed}`
+    lower.startsWith('http://') || lower.startsWith('https://') ? trimmed : `https://${trimmed}`
   try {
     const url = new URL(withScheme)
     url.hash = ''
@@ -40,6 +41,19 @@ export function normalizeStorageEndpoint(endpoint: string): string {
   } catch {
     return withScheme.toLowerCase()
   }
+}
+
+/** The stored document whose share room is `roomId`, if this list contains it. */
+export async function matchingStorageDocument<T extends { id: string }>(
+  roomId: string,
+  documents: readonly T[],
+  identity: { providerId: string; endpoint: string; bucket: string }
+): Promise<T | null> {
+  for (const document of documents) {
+    const id = await roomIdForStorageDocument({ ...identity, documentId: document.id })
+    if (id === roomId) return document
+  }
+  return null
 }
 
 /**

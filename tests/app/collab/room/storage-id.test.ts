@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  matchingStorageDocument,
   normalizeStorageEndpoint,
   roomIdForStorageDocument,
   storageCollabFingerprint
@@ -51,5 +52,23 @@ describe('storage collab room ids', () => {
       await roomIdForStorageDocument({ ...parts, documentId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' })
     )
     expect(a).not.toBe(await roomIdForStorageDocument({ ...parts, bucket: 'other-bucket' }))
+  })
+
+  test('finds the stored document a share room was derived from', async () => {
+    const identity = {
+      providerId: 's3-compatible',
+      endpoint: 'https://pencil-s3.rpine.xyz',
+      bucket: 'open-pencil'
+    }
+    const aska = {
+      id: '0bfe8bc5-ae3c-4ef9-8848-b886a94cc7d9',
+      name: 'aska-app'
+    }
+    const roomId = await roomIdForStorageDocument({ ...identity, documentId: aska.id })
+    expect(roomId).toBe('pnwttwlabdqwnv7quvklzx16s8jzqwza')
+    expect(await matchingStorageDocument(roomId, [aska], identity)).toEqual(aska)
+    expect(
+      await matchingStorageDocument(roomId, [{ id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' }], identity)
+    ).toBeNull()
   })
 })

@@ -9,7 +9,8 @@ import type { FigSessionResponse } from '#core/kiwi/fig/session/protocol'
 import {
   applyFigPopulationDelta,
   applyFigPopulationDeltaCooperatively,
-  populationDeltaNeedsCooperativeApply
+  populationDeltaNeedsCooperativeApply,
+  preserveLiveEdits
 } from './delta'
 
 /** The two responses this client acts on, taken from the session protocol itself. */
@@ -115,6 +116,12 @@ export function releaseFigPopulationWorker(graph: SceneGraph): void {
 export interface FigPopulationWorker {
   populate: (pageId: string, signal?: AbortSignal) => Promise<boolean | null>
   /**
+   * Load a page from the worker's original file after the live graph has been edited.
+   * `populate` refuses once edits have marked it stale, which is correct for the small-file
+   * recovery path. A large archive cannot take that path, so it asks the worker again.
+   */
+  populateFromArchive: (pageId: string, signal?: AbortSignal) => Promise<boolean | null>
+  /**
    * Stop loading pages through the worker. The worker itself keeps serving the document's
    * archive until the document closes, which releases it with the archive.
    */
@@ -131,6 +138,7 @@ function createRetiredWorker(
   let disposed = false
   return {
     populate: () => Promise.resolve(null),
+    populateFromArchive: () => Promise.resolve(null),
     terminate() {
       if (disposed || sharedWorker) return
       disposed = true
@@ -178,8 +186,11 @@ export function createPopulationWorkerClient(
     // Layout recomputation (import-time or after a switch) is derived from the
     // same scene graph the worker deltas were built from; it must not count as
     // user divergence. Only real user edits invalidate the worker.
-    if (applyingDelta || stale || graph.isApplyingLayout) return
+    if (applyingDelta || graph.isApplyingLayout) return
+    // Keep counting after the first edit. A page load already in flight must see
+    // a later edit and drop its delta, instead of writing the file over it.
     revision++
+    if (stale) return
     stale = true
     emitTelemetry({ event: 'stale', reason: 'graph-mutation' })
   }
@@ -226,10 +237,14 @@ export function createPopulationWorkerClient(
     clearTimeout(request.timeout)
     request.abort?.()
     pending.delete(result.requestId)
-    if (stale || revision !== request.revision || result.baseRevision !== request.revision) {
+    // `stale` stays set after the first edit so `populate` can hand a small file to
+    // main-thread recovery. A load asked for after that edit is still valid when its
+    // revision matches: a newer edit during the load is what rejects the delta.
+    if (revision !== request.revision || result.baseRevision !== request.revision) {
       emitTelemetry({ event: 'stale', reason: 'graph-mutation' })
       return request.resolve(null)
     }
+    const delta = preserveLiveEdits(graph, result.delta)
     applyingDelta = true
     const applyStartedAt = performance.now()
     const finish = (populated: boolean) => {
@@ -239,17 +254,17 @@ export function createPopulationWorkerClient(
         event: 'populate',
         durationMs: performance.now() - request.startedAt,
         applyMs: performance.now() - applyStartedAt,
-        created: result.delta.created.length,
-        updated: result.delta.updated.length,
-        deleted: result.delta.deleted.length
+        created: delta.created.length,
+        updated: delta.updated.length,
+        deleted: delta.deleted.length
       })
     }
     const apply = async () => {
       try {
-        if (populationDeltaNeedsCooperativeApply(result.delta)) {
-          await applyFigPopulationDeltaCooperatively(graph, result.delta)
+        if (populationDeltaNeedsCooperativeApply(delta)) {
+          await applyFigPopulationDeltaCooperatively(graph, delta)
         } else {
-          applyFigPopulationDelta(graph, result.delta)
+          applyFigPopulationDelta(graph, delta)
         }
         if (result.checkpoint) updateReaderRecovery(graph, result.checkpoint)
         finish(result.populated)
@@ -268,10 +283,7 @@ export function createPopulationWorkerClient(
     worker.onmessage = (event: MessageEvent<WorkerResult>) => receive(event.data)
   }
   worker.onerror = () => fail()
-  return {
-    populate(pageId, signal) {
-      signal?.throwIfAborted()
-      if (stale) return Promise.resolve(null)
+  function send(pageId: string, signal?: AbortSignal): Promise<boolean | null> {
       const requestId = randomHex()
       const baseRevision = revision
       return new Promise((resolve, reject) => {
@@ -295,6 +307,19 @@ export function createPopulationWorkerClient(
         if (port) port.postMessage({ type: 'populate', requestId, baseRevision, pageId })
         else worker.postMessage({ type: 'populate', requestId, baseRevision, pageId }, [])
       })
+  }
+  return {
+    populate(pageId, signal) {
+      signal?.throwIfAborted()
+      // Edits make the worker's copy diverge from the live graph. Small files then
+      // recover on the main thread. This refusal is what tells that path to start.
+      if (stale) return Promise.resolve(null)
+      return send(pageId, signal)
+    },
+    populateFromArchive(pageId, signal) {
+      signal?.throwIfAborted()
+      if (disposed) return Promise.resolve(null)
+      return send(pageId, signal)
     },
     terminate() {
       if (disposed) return

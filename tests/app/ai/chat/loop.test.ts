@@ -106,7 +106,7 @@ async function send(
   return drain(stream)
 }
 
-test('a repeated tool call stops the run and a different call still runs', async () => {
+test('a repeated tool call does not stop the run, and a later call still runs', async () => {
   const store = createEditorStore()
   const figma = installFigma()
   const reads: string[] = []
@@ -157,7 +157,7 @@ test('a repeated tool call stops the run and a different call still runs', async
   })
   try {
     await send(store, model, [{ id: 'user', role: 'user', parts: [{ type: 'text', text: ASK }] }])
-    expect(model.doStreamCalls).toHaveLength(3)
+    expect(model.doStreamCalls).toHaveLength(5)
     expect(reads).toEqual(['0:160', '0:163'])
     expect(userTexts(model.doStreamCalls[2]?.prompt).filter((text) => text === ASK)).toEqual([ASK])
   } finally {
@@ -167,7 +167,7 @@ test('a repeated tool call stops the run and a different call still runs', async
   }
 })
 
-test('the first duplicate of a successful call continues and the second stops', async () => {
+test('duplicates of a successful call return the stored result and the run continues', async () => {
   const store = createEditorStore()
   store.graph.createNode('RECTANGLE', store.state.currentPageId, {
     id: '0:163',
@@ -228,9 +228,9 @@ test('the first duplicate of a successful call continues and the second stops', 
     const outputs = toolOutputs(
       await send(store, model, [{ id: 'user', role: 'user', parts: [{ type: 'text', text: ASK }] }])
     )
-    // Resolved, then loaded. The replay and the stopping repeat do not read again.
-    expect(reads).toEqual(['0:163', '0:163', '0:163', '0:163'])
-    expect(model.doStreamCalls).toHaveLength(5)
+    // The two replays of the same get_node do not read again. The later edit does run.
+    expect(reads).toEqual(['0:163', '0:163', '0:163', '0:163', '0:162'])
+    expect(model.doStreamCalls).toHaveLength(7)
     const replay = outputs[1]
     expect(replay && typeof replay === 'object' && 'name' in replay ? replay.name : undefined).toBe(
       'Pixel-Art Flower Icon Grid'
@@ -250,11 +250,8 @@ test('the first duplicate of a successful call continues and the second stops', 
         'error' in output &&
         output.error === repeatedActionErrorFor('en')
     )
-    expect(stopped).toHaveLength(1)
-    expect(JSON.stringify(outputs)).not.toContain('Header')
-    expect(repeatedActionErrorFor('ru')).toBe(
-      'Модель повторила то же действие, и выполнение остановлено.'
-    )
+    expect(stopped).toHaveLength(0)
+    expect(JSON.stringify(outputs)).toContain('0:162')
   } finally {
     FigmaAPI.prototype.getNodeById = original
     figma.mockRestore()
@@ -262,7 +259,7 @@ test('the first duplicate of a successful call continues and the second stops', 
   }
 })
 
-test('a get_node call that already failed without an id is not run again', async () => {
+test('a get_node call that already failed without an id is not run again, and a later call still runs', async () => {
   const store = createEditorStore()
   const figma = installFigma()
   const reads: string[] = []
@@ -311,8 +308,8 @@ test('a get_node call that already failed without an id is not run again', async
   })
   try {
     await send(store, model, [{ id: 'user', role: 'user', parts: [{ type: 'text', text: ASK }] }])
-    expect(model.doStreamCalls).toHaveLength(2)
-    expect(reads).toEqual([])
+    expect(model.doStreamCalls).toHaveLength(4)
+    expect(reads).toEqual(['0:163'])
   } finally {
     FigmaAPI.prototype.getNodeById = original
     figma.mockRestore()
@@ -617,7 +614,7 @@ test('an unknown tool names the closest real tool and does not run it', async ()
   }
 })
 
-test('a new generation runs list_pages again after the previous run stopped a repeat', async () => {
+test('a new generation runs list_pages again, and a repeat does not stop the run', async () => {
   const store = createEditorStore()
   const figma = installFigma()
   let generation = 0
@@ -675,8 +672,8 @@ test('a new generation runs list_pages again after the previous run stopped a re
     const first = toolOutputs(
       await send(store, model, [{ id: 'user', role: 'user', parts: [{ type: 'text', text: ASK }] }])
     )
-    expect(listed(first)).toBe(2)
-    expect(stopped(first)).toBe(1)
+    expect(listed(first)).toBe(3)
+    expect(stopped(first)).toBe(0)
     expect(
       first.some(
         (output) =>
@@ -717,8 +714,8 @@ test('a new generation runs list_pages again after the previous run stopped a re
         'regenerate-message'
       )
     )
-    expect(listed(again)).toBe(2)
-    expect(stopped(again)).toBe(1)
+    expect(listed(again)).toBe(3)
+    expect(stopped(again)).toBe(0)
 
     generation = 2
     step = 0
@@ -745,8 +742,8 @@ test('a new generation runs list_pages again after the previous run stopped a re
         }
       ])
     )
-    expect(listed(fresh)).toBe(2)
-    expect(stopped(fresh)).toBe(1)
+    expect(listed(fresh)).toBe(3)
+    expect(stopped(fresh)).toBe(0)
   } finally {
     figma.mockRestore()
     store.dispose()
