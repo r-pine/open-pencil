@@ -48,6 +48,19 @@ describe('storage workspace reconciliation', () => {
     expect(result.remoteDocumentsToSeed.map((document) => document.id)).toEqual(['remote'])
   })
 
+  test('drops a synced local copy once the server listing no longer has it', () => {
+    const result = reconcileStorageDocuments(
+      [localMeta('gone', 'synced'), localMeta('pending-upload', 'pending')],
+      [remoteDocument('remote')]
+    )
+
+    expect(result.documents.map((document) => document.id)).toEqual([
+      'pending-upload',
+      'remote'
+    ])
+    expect(result.localIdsToPurge).toEqual(['gone'])
+  })
+
   test('hides tombstones until deletion is confirmed and then purges them', () => {
     const waiting = reconcileStorageDocuments(
       [localMeta('deleted', 'synced', true)],

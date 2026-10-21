@@ -17,7 +17,9 @@ export {
   type WriteFigArchiveInput
 } from './archive'
 export {
+  decodeFigPatchFields,
   decodeFigPatchRecords,
+  encodeFigPatchFields,
   encodeFigPatchRecords,
   figArchiveComponentUsePages,
   figArchiveRecordInfo,
@@ -29,6 +31,7 @@ export {
   entryPathKey,
   type FigEntryListPatch,
   type FigEntryPatch,
+  type FigFieldPatchMeta,
   type FigRecordFieldPatch,
   type FigRecordPatch
 } from './record-patch'

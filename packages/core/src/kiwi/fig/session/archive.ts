@@ -1,8 +1,10 @@
 import {
+  encodeFigPatchFields,
   encodeFigPatchRecords,
   figArchiveComponentUsePages,
   patchFigArchive,
   type FigArchiveRecordInfo,
+  type FigFieldPatchMeta,
   type FigPatchedArchiveInput,
   type FigRecordPatch
 } from '@open-pencil/fig'
@@ -121,6 +123,8 @@ function ownedBytes(bytes: Uint8Array, transfer: ArrayBuffer[]): Uint8Array {
 
 interface PortableArchivePatch {
   records: Uint8Array
+  fieldSets: Uint8Array
+  fieldMeta: FigFieldPatchMeta[]
   blobs: Uint8Array[]
   removed: FigRecordPatch['removed']
   replaceVariables: boolean
@@ -141,9 +145,19 @@ function portableArchivePatch(
   const transfer: ArrayBuffer[] = []
   const records = encodeFigPatchRecords(schemaDeflated, patch.records)
   transfer.push(records.buffer)
+  let encodedFields: ReturnType<typeof encodeFigPatchFields>
+  try {
+    encodedFields = encodeFigPatchFields(schemaDeflated, patch.fields ?? [])
+  } catch (error) {
+    // The caller patches on this thread when the worker cannot take the records.
+    throw new Error('patch records', { cause: error })
+  }
+  if (encodedFields.sets.byteLength > 0) transfer.push(encodedFields.sets.buffer)
   const thumbnailPNG = input.thumbnailPNG ? ownedBytes(input.thumbnailPNG, transfer) : undefined
   return {
     records,
+    fieldSets: encodedFields.sets,
+    fieldMeta: encodedFields.meta,
     blobs: patch.blobs.map((blob) => ownedBytes(blob, transfer)),
     removed: patch.removed,
     replaceVariables: patch.replaceVariables,
@@ -273,6 +287,8 @@ export function workerFigArchive(
         {
           type: 'patch-archive',
           records: portable.records,
+          fieldSets: portable.fieldSets,
+          fieldMeta: portable.fieldMeta,
           blobs: portable.blobs,
           removed: portable.removed,
           replaceVariables: portable.replaceVariables,

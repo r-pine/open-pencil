@@ -25,6 +25,8 @@ export function reconcileStorageDocuments(
 
   for (const metadata of local) {
     if (metadata.tombstoned) continue
+    // A copy already confirmed on the server is gone once the listing no longer has it.
+    if (metadata.syncStatus === 'synced' && !remoteIds.has(metadata.id)) continue
     if (metadata.syncStatus === 'synced' && merged.has(metadata.id)) continue
     merged.set(metadata.id, {
       id: metadata.id,
@@ -40,7 +42,11 @@ export function reconcileStorageDocuments(
     ),
     remoteDocumentsToSeed: remote.filter((document) => !localById.has(document.id)),
     localIdsToPurge: local
-      .filter((metadata) => metadata.tombstoned && !remoteIds.has(metadata.id))
+      .filter(
+        (metadata) =>
+          !remoteIds.has(metadata.id) &&
+          (metadata.tombstoned || metadata.syncStatus === 'synced')
+      )
       .map((metadata) => metadata.id)
   }
 }

@@ -37,7 +37,7 @@ import {
   settleFontDigestMap
 } from '#core/kiwi/fig/node-change/serialize'
 
-import { figThumbnailIsExpensive, isFigSaveMemoryError } from './thumbnail-budget'
+import { figPageThumbnailIsExpensive, isFigSaveMemoryError } from './thumbnail-budget'
 import { assignVariableGuid, assignVariableGuids } from './variable-export'
 
 /**
@@ -104,14 +104,13 @@ async function renderFigThumbnail(
   renderer?: SkiaRenderer,
   renderHeadless = false
 ): Promise<RenderedFigThumbnail> {
-  // Huge documents decode every image fill at a 2e9 viewport. Skip that and keep saving.
-  if (figThumbnailIsExpensive(graph)) return skippedThumbnail()
-  if (!pageId) return { png: THUMBNAIL_1X1, skipped: false }
+  // A file with thousands of images can still paint its cover. An unloaded page, or a paint
+  // that produced only the placeholder, keeps the thumbnail the archive already has.
+  if (!pageId || figPageThumbnailIsExpensive(graph, pageId)) return skippedThumbnail()
   try {
-    return {
-      png: await paintFigThumbnail(graph, pageId, ck, renderer, renderHeadless),
-      skipped: false
-    }
+    const png = await paintFigThumbnail(graph, pageId, ck, renderer, renderHeadless)
+    if (png === THUMBNAIL_1X1) return skippedThumbnail()
+    return { png, skipped: false }
   } catch (error) {
     if (!isFigSaveMemoryError(error)) throw error
     releaseThumbnailImages(renderer)

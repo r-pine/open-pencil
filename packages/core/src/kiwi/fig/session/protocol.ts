@@ -1,5 +1,6 @@
 import type {
   FigArchiveRecordInfo,
+  FigFieldPatchMeta,
   FigPatchedArchiveInput,
   FigRecordPatch,
   FigSessionCheckpoint
@@ -50,6 +51,13 @@ export interface FigSessionPatchArchiveRequest {
    * The worker decodes it with the archive schema it already holds.
    */
   records: Uint8Array
+  /**
+   * `encodeFigPatchFields` output: the changed fields of records the archive already holds.
+   * Empty when the patch only replaces whole records. Transferred, not cloned.
+   */
+  fieldSets: Uint8Array
+  /** Which decoded fields to keep. Kiwi fills defaults the archive must not take. */
+  fieldMeta: FigFieldPatchMeta[]
   blobs: Uint8Array[]
   removed: FigRecordPatch['removed']
   replaceVariables: boolean

@@ -1,5 +1,5 @@
 import type { Editor, EditorState } from '@open-pencil/core/editor'
-import { exportFigFile } from '@open-pencil/core/io/formats/fig'
+import { exportFigFile, findFigThumbnailPageId } from '@open-pencil/core/io/formats/fig'
 
 import { createAutosave } from '@/app/document/autosave'
 import { createDocumentChanges } from '@/app/document/io/changes'
@@ -60,13 +60,17 @@ export function createDocumentSourceActions({
     return saved
   }
 
+  function coverPageId() {
+    return findFigThumbnailPageId(editor.graph.getPages())
+  }
+
   function buildFigFile() {
     const renderer = getRenderer()
-    return exportFigFile(editor.graph, renderer?.ck, renderer ?? undefined, state.currentPageId)
+    return exportFigFile(editor.graph, renderer?.ck, renderer ?? undefined, coverPageId())
   }
 
   function buildRecoveryFigFile() {
-    return exportFigFile(editor.graph, undefined, undefined, state.currentPageId)
+    return exportFigFile(editor.graph, undefined, undefined, coverPageId())
   }
 
   const recovery = createDocumentRecovery({
@@ -203,8 +207,16 @@ export function createDocumentSourceActions({
     return saved
   }
 
-  /** Upload the document to storage as a new stored document and keep editing it there. */
+  /**
+   * Upload the document to storage and keep editing it there. A file already stored keeps its
+   * id, so the share link stays the one people already have.
+   */
   async function saveFigFileToStorage(providerId: StorageProviderID): Promise<boolean> {
+    const existing = getStorageBinding()
+    if (existing?.providerId === providerId) {
+      state.autosaveEnabled = true
+      return saveAndTrack(saveFigFile)
+    }
     const saved = await saveToNewTarget(() => {
       stopWatchingFile()
       setFileHandle(null)

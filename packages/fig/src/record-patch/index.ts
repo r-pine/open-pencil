@@ -438,6 +438,67 @@ export function decodeFigPatchRecords(
   return message.nodeChanges ?? []
 }
 
+/**
+ * The changed fields of one archive record, as they travel to the worker. `keys` names the
+ * fields of `set` that were encoded; a Kiwi decode also fills defaults, and those must not
+ * overwrite the archive.
+ */
+export interface FigFieldPatchMeta {
+  guid: GUID
+  keys: string[]
+  unset: string[]
+  symbolOverrides?: FigRecordFieldPatch['symbolOverrides']
+  derivedSymbolData?: FigRecordFieldPatch['derivedSymbolData']
+}
+
+/** Field patches as one Kiwi message plus the list of fields each record actually changed. */
+export function encodeFigPatchFields(
+  schemaDeflated: Uint8Array,
+  fields: readonly FigRecordFieldPatch[]
+): { sets: Uint8Array; meta: FigFieldPatchMeta[] } {
+  if (fields.length === 0) return { sets: new Uint8Array(), meta: [] }
+  return {
+    sets: encodeFigPatchRecords(
+      schemaDeflated,
+      fields.map((field) => ({ ...field.set, guid: field.guid }))
+    ),
+    meta: fields.map((field) => ({
+      guid: field.guid,
+      keys: Object.keys(field.set),
+      unset: field.unset,
+      ...(field.symbolOverrides ? { symbolOverrides: field.symbolOverrides } : {}),
+      ...(field.derivedSymbolData ? { derivedSymbolData: field.derivedSymbolData } : {})
+    }))
+  }
+}
+
+/** `encodeFigPatchFields` read back. Only the named keys are kept from each decoded record. */
+export function decodeFigPatchFields(
+  schemaDeflated: Uint8Array,
+  sets: Uint8Array,
+  meta: readonly FigFieldPatchMeta[]
+): FigRecordFieldPatch[] {
+  if (meta.length === 0) return []
+  const decoded = decodeFigPatchRecords(schemaDeflated, sets)
+  return meta.map((entry, index) => {
+    const record = decoded[index]
+    const set: Partial<NodeChange> = {}
+    if (record) {
+      for (const key of entry.keys) {
+        const field = key as keyof NodeChange
+        if (field in record) set[field] = record[field]
+      }
+    }
+    return {
+      guid: entry.guid,
+      set,
+      unset: entry.unset,
+      ...(entry.symbolOverrides ? { symbolOverrides: entry.symbolOverrides } : {}),
+      ...(entry.derivedSymbolData ? { derivedSymbolData: entry.derivedSymbolData } : {})
+    }
+  })
+}
+
 function varUint(value: number): Uint8Array {
   const bb = new ByteBuffer()
   bb.writeVarUint(value)

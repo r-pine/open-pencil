@@ -11,6 +11,7 @@ import { computeDescendantVisualBounds, type VisualBounds } from '@open-pencil/s
 
 import type { SkiaRenderer } from '#core/canvas'
 import { getPageColor } from '#core/figma-api/page-backgrounds'
+import { findTopmostThumbnailChild } from '#core/io/formats/fig/thumbnail-page'
 import { isFigSaveMemoryError } from '#core/io/formats/fig/thumbnail-budget'
 import { extractExportGraph, findPageId } from '#core/io/subgraph'
 
@@ -337,7 +338,9 @@ export function renderThumbnail(
     const page = graph.getNode(pageId)
     if (!page || page.childIds.length === 0) return null
 
-    const bounds = computeContentBounds(graph, page.childIds)
+    const children = graph.getChildren(pageId)
+    const topId = findTopmostThumbnailChild(children)
+    const bounds = computeContentBounds(graph, topId ? [topId] : page.childIds)
     if (!bounds) return null
 
     const contentW = bounds.maxX - bounds.minX

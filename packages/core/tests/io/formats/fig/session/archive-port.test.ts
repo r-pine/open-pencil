@@ -49,6 +49,8 @@ test('a patch transfers encoded records and copies of new bytes', async () => {
         if (request.type !== 'patch-archive') return
         expect(request).not.toHaveProperty('patch')
         expect(request.records).toBeInstanceOf(Uint8Array)
+        expect(request.fieldMeta).toEqual([])
+        expect(request.fieldSets.byteLength).toBe(0)
         expect(decodeFigPatchRecords(schema, request.records)).toEqual(records)
         const buffers = (transfer as ArrayBuffer[] | undefined) ?? []
         expect(buffers.includes(image.buffer)).toBe(false)

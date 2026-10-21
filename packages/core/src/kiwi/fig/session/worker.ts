@@ -1,4 +1,4 @@
-import { decodeFigPatchRecords } from '@open-pencil/fig'
+import { decodeFigPatchFields, decodeFigPatchRecords } from '@open-pencil/fig'
 
 import { serializeSceneGraph } from '#core/kiwi/fig/parse/transfer'
 import { createFigArchiveOperations } from '#core/kiwi/fig/session/archive'
@@ -64,10 +64,12 @@ function answerArchiveRequest(request: ArchiveRequest): void {
     } else {
       if (!patchSchema) throw new Error('FIG session has no archive schema')
       const records = decodeFigPatchRecords(patchSchema, request.records)
+      const fields = decodeFigPatchFields(patchSchema, request.fieldSets, request.fieldMeta)
       const bytes = exactTransferBytes(
         archive.patch(
           {
             records,
+            fields,
             blobs: request.blobs,
             removed: request.removed,
             replaceVariables: request.replaceVariables

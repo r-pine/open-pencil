@@ -2,7 +2,9 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 
 import { guid } from '#fig-tests/helpers/guid'
 import {
+  decodeFigPatchFields,
   decodeFigPatchRecords,
+  encodeFigPatchFields,
   encodeFigPatchRecords,
   figComponentUsePages,
   patchFigMessage,
@@ -213,5 +215,49 @@ describe('splicing an encoded message', () => {
     expect(patchFigMessage(schema, data, patch)).toEqual(
       patchFigMessage(schema, data, { ...patch, records })
     )
+  })
+
+  test('a changed name survives the worker encoding and is the only field applied', () => {
+    const codec = getCompiledSchema()
+    const schema = deflateSync(getSchemaBytes())
+    const archive = [
+      record(0, null, { type: 'DOCUMENT', name: 'Document' }),
+      record(1, 0, { type: 'CANVAS', name: 'Page' }),
+      record(2, 1, { name: 'Renamed', opacity: 0.5 })
+    ]
+    const data = codec.encodeMessage({
+      type: 'NODE_CHANGES',
+      sessionID: 0,
+      ackID: 0,
+      nodeChanges: archive
+    })
+    const fields = [
+      {
+        guid: guid(2),
+        set: { name: 'Renamed again' },
+        unset: []
+      }
+    ]
+    const encoded = encodeFigPatchFields(schema, fields)
+    const decoded = decodeFigPatchFields(schema, encoded.sets, encoded.meta)
+    expect(decoded).toEqual(fields)
+    const patched = patchFigRecords(archive, {
+      records: [],
+      fields: decoded,
+      blobs: [],
+      removed: [],
+      replaceVariables: false
+    })
+    expect(patched.find((entry) => entry.guid?.localID === 2)).toMatchObject({
+      name: 'Renamed again',
+      opacity: 0.5
+    })
+    expect(patchFigMessage(schema, data, {
+      records: [],
+      fields: decoded,
+      blobs: [],
+      removed: [],
+      replaceVariables: false
+    })).toBeTruthy()
   })
 })
