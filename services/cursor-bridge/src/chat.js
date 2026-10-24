@@ -112,6 +112,34 @@ function assistantToolCalls(message) {
   return calls
 }
 
+const MAX_TOOL_TEXT = 24_000
+
+function looksLikeBase64(value) {
+  return value.length > 2000 && /^[A-Za-z0-9+/=\s]{200,}/.test(value.slice(0, 240))
+}
+
+function compactValue(value, depth = 0) {
+  if (depth > 8) return '[truncated]'
+  if (typeof value === 'string') {
+    if (value.startsWith('data:image/') || looksLikeBase64(value)) return `[omitted ${value.length} chars]`
+    if (value.length > MAX_TOOL_TEXT) return `${value.slice(0, MAX_TOOL_TEXT)}… [${value.length} chars]`
+    return value
+  }
+  if (Array.isArray(value)) return value.map((item) => compactValue(item, depth + 1))
+  if (value && typeof value === 'object') {
+    const out = {}
+    for (const [key, nested] of Object.entries(value)) {
+      if ((key === 'data' || key === 'base64' || key === 'url') && typeof nested === 'string' && nested.length > 2000) {
+        out[key] = `[omitted ${nested.length} chars]`
+        continue
+      }
+      out[key] = compactValue(nested, depth + 1)
+    }
+    return out
+  }
+  return value
+}
+
 function toolResultText(message) {
   const content = message.content
   if (Array.isArray(content)) {
@@ -119,7 +147,8 @@ function toolResultText(message) {
       if (!part || typeof part !== 'object') continue
       if (part.type !== 'tool-result' && part.type !== 'tool_result') continue
       const output = part.result ?? part.output ?? part.text ?? ''
-      return typeof output === 'string' ? output : JSON.stringify(output)
+      const compact = compactValue(output)
+      return typeof compact === 'string' ? compact : JSON.stringify(compact)
     }
   }
   return textContent(content)
@@ -718,8 +747,19 @@ function publicError(error) {
     .slice(0, 400)
 }
 
+let openRun = openCursorRun
+
+/** Tests substitute the Cursor socket. Production keeps the real HTTP/2 run. */
+export function useCursorRun(factory) {
+  const previous = openRun
+  openRun = factory
+  return () => {
+    openRun = previous
+  }
+}
+
 function startRun(accessToken, requestBytes) {
-  const bridge = openCursorRun(accessToken)
+  const bridge = openRun(accessToken)
   bridge.write(frameConnectMessage(requestBytes))
   const entry = { bridge, heartbeatTimer: null, touched: Date.now() }
   ensureHeartbeat(entry)
@@ -760,8 +800,33 @@ export function sweepBridges(now = Date.now()) {
   }
 }
 
+export function assistantCompletion(id, created, modelId, content) {
+  return {
+    id,
+    object: 'chat.completion',
+    created,
+    model: modelId,
+    choices: [{
+      index: 0,
+      message: { role: 'assistant', content },
+      finish_reason: 'stop'
+    }]
+  }
+}
+
+/**
+ * `JSON.stringify(undefined)` is `undefined`, and `Buffer.from(undefined)` kills
+ * the process. A missing body must still be a JSON string.
+ */
+export function jsonResponseBody(body) {
+  if (typeof body === 'string') return body
+  if (body == null) return JSON.stringify({ error: { message: 'Cursor request failed' } })
+  return JSON.stringify(body)
+}
+
 function sendBytes(res, status, contentType, body) {
-  const payload = Buffer.from(body)
+  const payload = Buffer.from(jsonResponseBody(body))
+  if (res.headersSent || res.writableEnded) return
   res.writeHead(status, {
     'Content-Type': contentType,
     'Content-Length': payload.length,
@@ -992,8 +1057,12 @@ function attachStream(entry, modelId, req, res, stream) {
       return
     }
     if (!res.headersSent) {
-      sendBytes(res, status, 'application/json; charset=utf-8', JSON.stringify(body))
+      sendBytes(res, status, 'application/json; charset=utf-8', body)
     }
+  }
+  const finishTurn = () => {
+    if (stream) finish(200)
+    else finish(200, assistantCompletion(id, created, modelId, chunks.join('')))
   }
   const abort = () => {
     if (closed || paused) return
@@ -1030,71 +1099,76 @@ function attachStream(entry, modelId, req, res, stream) {
   })
 
   const stopData = entry.bridge.onData(createFrameParser((bytes) => {
-    let serverMessage
     try {
-      serverMessage = fromBinary(AgentServerMessage, bytes)
-    } catch (error) {
-      if (seen.length < 8) console.error(`[cursor-bridge] decode failed: ${publicError(error)}`)
-      return
-    }
-    const messageCase = serverMessage.message?.case
-    const update = messageCase === 'interactionUpdate' ? serverMessage.message.value?.message : null
-    if (seen.length < 12) {
-      const label = update?.case ? `${messageCase}:${update.case}` : (messageCase || 'empty')
-      seen.push(label)
-      console.error(`[cursor-bridge] message ${label}`)
-    }
-    if (!paused && !closed) replyIdle.observe(messageCase, update?.case, Boolean(update?.value?.text))
-    if (messageCase === 'interactionUpdate') {
-      if (update?.case === 'textDelta' && update.value?.text) {
-        chunks.push(update.value.text)
-        send(chunk({ content: update.value.text }))
-      } else if (update?.case === 'thinkingDelta' && update.value?.text) {
-        send(chunk({ reasoning_content: update.value.text }))
-      } else if (update?.case === 'turnEnded' && !paused && !closed) {
-        // The agent socket stays open after the turn. Without this the client
-        // only sees pings until it gives up.
-        if (chunks.length || sentData) finish(200)
-        else finish(504, { error: { message: IDLE_REPLY_ERROR } })
-        activeBridges.delete(entry.key)
-        cancelBridge(entry)
+      let serverMessage
+      try {
+        serverMessage = fromBinary(AgentServerMessage, bytes)
+      } catch (error) {
+        if (seen.length < 8) console.error(`[cursor-bridge] decode failed: ${publicError(error)}`)
+        return
       }
-      return
-    }
-    if (messageCase === 'kvServerMessage') {
-      handleKv(serverMessage.message.value, entry.blobStore, entry.bridge)
-      return
-    }
-    if (messageCase === 'execServerMessage') {
-      handleExec(serverMessage.message.value, entry.mcpTools, entry.bridge, (exec) => {
-        entry.pending.push(exec)
-        if (paused) return
-        paused = true
-        activeBridges.set(entry.key, entry)
-        entry.touched = Date.now()
-        if (stream) {
-          const index = entry.pending.length - 1
-          send(chunk({
-            tool_calls: [{
-              index,
-              id: exec.toolCallId,
-              type: 'function',
-              function: { name: exec.toolName, arguments: exec.decodedArgs }
-            }]
-          }))
-          send(chunk({}, 'tool_calls'))
-          closed = true
-          replyIdle.stop()
-          clearInterval(ping)
-          res.write('data: [DONE]\n\n')
-          res.end()
-        } else {
-          closed = true
-          replyIdle.stop()
-          clearInterval(ping)
-          writeToolCalls(res, modelId, entry.pending, false)
+      const messageCase = serverMessage.message?.case
+      const update = messageCase === 'interactionUpdate' ? serverMessage.message.value?.message : null
+      if (seen.length < 12) {
+        const label = update?.case ? `${messageCase}:${update.case}` : (messageCase || 'empty')
+        seen.push(label)
+        console.error(`[cursor-bridge] message ${label}`)
+      }
+      if (!paused && !closed) replyIdle.observe(messageCase, update?.case, Boolean(update?.value?.text))
+      if (messageCase === 'interactionUpdate') {
+        if (update?.case === 'textDelta' && update.value?.text) {
+          chunks.push(update.value.text)
+          send(chunk({ content: update.value.text }))
+        } else if (update?.case === 'thinkingDelta' && update.value?.text) {
+          send(chunk({ reasoning_content: update.value.text }))
+        } else if (update?.case === 'turnEnded' && !paused && !closed) {
+          // The agent socket stays open after the turn. Without this the client
+          // only sees pings until it gives up.
+          if (chunks.length || sentData) finishTurn()
+          else finish(504, { error: { message: IDLE_REPLY_ERROR } })
+          activeBridges.delete(entry.key)
+          cancelBridge(entry)
         }
-      })
+        return
+      }
+      if (messageCase === 'kvServerMessage') {
+        handleKv(serverMessage.message.value, entry.blobStore, entry.bridge)
+        return
+      }
+      if (messageCase === 'execServerMessage') {
+        handleExec(serverMessage.message.value, entry.mcpTools, entry.bridge, (exec) => {
+          entry.pending.push(exec)
+          if (paused) return
+          paused = true
+          activeBridges.set(entry.key, entry)
+          entry.touched = Date.now()
+          if (stream) {
+            const index = entry.pending.length - 1
+            send(chunk({
+              tool_calls: [{
+                index,
+                id: exec.toolCallId,
+                type: 'function',
+                function: { name: exec.toolName, arguments: exec.decodedArgs }
+              }]
+            }))
+            send(chunk({}, 'tool_calls'))
+            closed = true
+            replyIdle.stop()
+            clearInterval(ping)
+            res.write('data: [DONE]\n\n')
+            res.end()
+          } else {
+            closed = true
+            replyIdle.stop()
+            clearInterval(ping)
+            writeToolCalls(res, modelId, entry.pending, false)
+          }
+        })
+      }
+    } catch (error) {
+      console.error(`[cursor-bridge] message failed: ${publicError(error)}`)
+      if (!closed) finish(500, { error: { message: 'bridge failed' } })
     }
   }, (endBytes) => {
     try {
@@ -1102,18 +1176,22 @@ function attachStream(entry, modelId, req, res, stream) {
       if (payload?.error) {
         const message = publicError(payload.error)
         console.error(`[cursor-bridge] upstream error ${message}`)
-        // A run that dies before any text is the same stop as the idle timer.
-        // 400 keeps the SDK from retrying it into a second, harder failure.
+        // 400 keeps the SDK from retrying a hard upstream failure.
+        // An empty message before any text is the same stop as the idle timer;
+        // a real Cursor message must reach the client instead of that phrase.
         const stalled = !chunks.length && !paused
+        const shown = message && message !== 'Cursor request failed'
+          ? message
+          : (stalled ? IDLE_REPLY_ERROR : message)
         finish(400, {
-          error: { message: stalled ? IDLE_REPLY_ERROR : message, type: 'upstream_error' }
+          error: { message: shown, type: 'upstream_error' }
         })
       }
     } catch {
       // An end frame without JSON is a normal close. Finish it: a bidi run does
       // not always drop the socket, and a ping-only body is not a completion.
       if (paused || closed) return
-      if (chunks.length || sentData) finish(200)
+      if (chunks.length || sentData) finishTurn()
       else finish(504, { error: { message: IDLE_REPLY_ERROR } })
       activeBridges.delete(entry.key)
       cancelBridge(entry)
@@ -1131,18 +1209,7 @@ function attachStream(entry, modelId, req, res, stream) {
       })
       return
     }
-    const content = chunks.join('')
-    if (stream) {
-      finish(200)
-    } else {
-      finish(200, {
-        id,
-        object: 'chat.completion',
-        created,
-        model: modelId,
-        choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }]
-      })
-    }
+    finishTurn()
   })
   detachListeners = () => {
     stopData()

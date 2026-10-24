@@ -6,10 +6,12 @@ import { ValueSchema } from '@bufbuild/protobuf/wkt'
 
 import {
   IDLE_REPLY_ERROR,
+  assistantCompletion,
   buildFreshRunRequest,
   countsAsAgentOutput,
   createReplyIdle,
   freshConversationId,
+  jsonResponseBody,
   parseMessages
 } from '../src/chat.js'
 import { cursorSchema } from '../src/proto.js'
@@ -151,6 +153,18 @@ test('a later user message stays the run action and keeps the earlier tool resul
   assert.equal(steps.length, 1)
   assert.equal(steps[0].toolCallId, 'call_header')
   assert.equal(steps[0].text, headerResult)
+})
+
+test('a finished reply without a body is still JSON and keeps the assistant text', () => {
+  const completion = assistantCompletion('chatcmpl-1', 10, 'grok-4.7-high-fast', 'hello')
+  assert.equal(completion.choices[0].message.content, 'hello')
+  assert.equal(completion.choices[0].finish_reason, 'stop')
+  const encoded = jsonResponseBody(completion)
+  assert.equal(Buffer.from(encoded).toString('utf8'), encoded)
+  const missing = jsonResponseBody(undefined)
+  assert.equal(typeof missing, 'string')
+  assert.equal(JSON.parse(missing).error.message, 'Cursor request failed')
+  assert.doesNotThrow(() => Buffer.from(missing))
 })
 
 test('heartbeats keep a live reply open until the cap, and a quiet one still stops', () => {
@@ -304,6 +318,44 @@ test('a second connection test does not reuse a conversation whose blobs are gon
     assert.equal(discarded.has(id), true)
   }
   assert.equal(secondRun.conversationId === firstRun.conversationId, false)
+})
+
+test('tool results drop image bytes before they reach Cursor', () => {
+  const pixels = Buffer.alloc(8_000, 7).toString('base64')
+  const { blobStore } = freshRun([
+    { role: 'user', content: 'export the node' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'call_export',
+        function: { name: 'export_image', arguments: '{"ids":["0:1"]}' }
+      }]
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'call_export',
+      content: [{
+        type: 'tool-result',
+        toolName: 'export_image',
+        toolCallId: 'call_export',
+        output: {
+          type: 'file',
+          mediaType: 'image/png',
+          data: pixels,
+          caption: 'button row'
+        }
+      }]
+    }
+  ])
+  const exported = toolSteps(blobStore).find((step) => step.toolName === 'export_image')
+  assert.ok(exported)
+  assert.equal(exported.text.includes(pixels), false)
+  assert.match(exported.text, /omitted \d+ chars/)
+  assert.match(exported.text, /button row/)
+  for (const value of blobStore.values()) {
+    assert.equal(value.includes(Buffer.from(pixels)), false)
+  }
 })
 
 test('agent text schedules a new idle deadline and a stopped timer does not fire', () => {
