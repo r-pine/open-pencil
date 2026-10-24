@@ -104,8 +104,14 @@ function statusFailureReason(status: number | null): AIChatFailureReason | null 
 const CURSOR_STALL_TEXT = 'cursor stopped sending a reply'
 
 function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  return typeof error === 'string' ? error : ''
+  if (error instanceof Error || typeof error === 'string') {
+    return error instanceof Error ? error.message : error
+  }
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string') return message
+  }
+  return ''
 }
 
 /** A Cursor reply that stopped, whether the bridge said so or the event stream went quiet. */
@@ -119,7 +125,8 @@ export function isCursorReplyStall(error: unknown): boolean {
       return true
     }
     seen.add(current)
-    current = (current as { cause?: unknown }).cause
+    const next = current as { cause?: unknown; lastError?: unknown }
+    current = next.cause ?? next.lastError
   }
   const text = errorMessage(error).toLowerCase()
   return text.includes(CURSOR_STALL_TEXT) || text.includes('cursor event stream sent no data')

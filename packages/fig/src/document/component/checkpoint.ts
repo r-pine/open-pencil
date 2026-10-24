@@ -32,9 +32,11 @@ export function restoreComponentCheckpoint(
   graph: SceneGraph,
   occurrence: InstanceOccurrence,
   checkpoint: ComponentCheckpoint
-): MaterializedComponentOccurrence {
+): MaterializedComponentOccurrence | null {
   const root = graph.getNode(checkpoint.rootId)
-  if (!root) throw new Error(`Missing resumed component ${checkpoint.rootId}`)
+  // The layer was removed after the checkpoint, or a page load never inserted it. Skipping it
+  // lets the rest of the document resume; the next page that needs it builds it again.
+  if (!root) return null
   const currentlyMaterialized = new Map<string, SceneNode>()
   const visitCurrent = (node: SceneNode, path: string[]): void => {
     currentlyMaterialized.set(path.join('/'), node)

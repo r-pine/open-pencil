@@ -1,9 +1,6 @@
 import { expect, test } from 'bun:test'
 
-import {
-  CursorEventStreamStallError,
-  guardCursorEventStream
-} from '@/app/ai/providers/cursor/event-stream'
+import { guardCursorEventStream } from '@/app/ai/providers/cursor/event-stream'
 
 const encoder = new TextEncoder()
 
@@ -52,11 +49,11 @@ function merge(parts: Uint8Array[]): Uint8Array {
   return merged
 }
 
-test('a body of only ping comments is not a successful completion', async () => {
+test('a body of only ping comments ends as a stall the SDK can read', async () => {
   const result = await readGuarded(bodyOf([': ping\n\n', ': ping\n\n']), 5_000)
-  expect(result.completed).toBe(false)
-  if (result.completed) return
-  expect(result.error).toBeInstanceOf(CursorEventStreamStallError)
+  expect(result.completed).toBe(true)
+  expect(result.text).toContain('Cursor stopped sending a reply')
+  expect(result.text).toContain('data: [DONE]')
 })
 
 test('a later data event after ping comments is still applied', async () => {
@@ -78,9 +75,30 @@ test('a data event split across chunks after a ping is still applied', async () 
   expect(result.text).toContain('Hello')
 })
 
-test('an open stream of only ping comments fails instead of waiting', async () => {
+test('a later ping comment extends the wait for the reply', async () => {
+  let push: (text: string) => void = () => {}
+  let close: () => void = () => {}
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) {
+      push = (text) => controller.enqueue(bytes(text))
+      close = () => controller.close()
+    }
+  })
+  const pending = readGuarded(source, 100)
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  push(': ping\n\n')
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  push('data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n')
+  close()
+  const result = await pending
+  expect(result.completed).toBe(true)
+  expect(result.text).toContain('Hi')
+  expect(result.text).not.toContain('Cursor stopped sending a reply')
+})
+
+test('an open stream of only ping comments ends as a stall instead of waiting', async () => {
   const result = await readGuarded(bodyOf([': ping\n\n'], true), 40)
-  expect(result.completed).toBe(false)
-  if (result.completed) return
-  expect(result.error).toBeInstanceOf(CursorEventStreamStallError)
+  expect(result.completed).toBe(true)
+  expect(result.text).toContain(': ping')
+  expect(result.text).toContain('Cursor stopped sending a reply')
 })

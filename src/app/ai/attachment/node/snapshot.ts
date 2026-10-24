@@ -1,4 +1,4 @@
-import { findPageId, renderNodesToImage } from '@open-pencil/core/io'
+import { renderNodePreview } from '@/app/ai/attachment/node/preview'
 
 import type { NodePresentation } from '@/app/ai/attachment/presentation/types'
 import type { ReferencedNode } from '@/app/ai/chat/context'
@@ -12,15 +12,13 @@ export function snapshotNode(
   const renderer = store.renderer
   const liveNode = store.graph.getNode(node.id)
   if (!renderer || !liveNode) return null
-  const maxDimension = Math.max(liveNode.width, liveNode.height, 1)
-  const data = renderNodesToImage(
-    renderer.ck,
-    renderer,
-    store.graph,
-    store.state.currentPageId,
-    [node.id],
-    { scale: 320 / maxDimension, format: 'PNG' }
-  )
+  let data: Uint8Array | null
+  try {
+    data = renderNodePreview(store.graph, renderer, node.id, 320)
+  } catch (error) {
+    console.warn('Node preview skipped', error)
+    return null
+  }
   if (!data) return null
   const previewBytes = new Uint8Array(data.byteLength)
   previewBytes.set(data)

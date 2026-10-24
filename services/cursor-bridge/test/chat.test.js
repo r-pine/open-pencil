@@ -153,11 +153,13 @@ test('a later user message stays the run action and keeps the earlier tool resul
   assert.equal(steps[0].text, headerResult)
 })
 
-test('heartbeats do not extend the idle timer', () => {
+test('heartbeats keep a live reply open until the cap, and a quiet one still stops', () => {
   assert.equal(countsAsAgentOutput('interactionUpdate', 'heartbeat', false), false)
-  assert.equal(countsAsAgentOutput('interactionUpdate', 'tokenDelta', false), false)
+  assert.equal(countsAsAgentOutput('interactionUpdate', 'tokenDelta', false), true)
+  assert.equal(countsAsAgentOutput('kvServerMessage', undefined, false), true)
   assert.equal(countsAsAgentOutput('interactionUpdate', 'textDelta', false), false)
   assert.equal(countsAsAgentOutput('interactionUpdate', 'textDelta', true), true)
+  let time = 1_000
   const scheduled = []
   let fired = null
   const idle = createReplyIdle(50_000, () => {
@@ -166,15 +168,23 @@ test('heartbeats do not extend the idle timer', () => {
     const handle = { fn, ms }
     scheduled.push(handle)
     return handle
-  }, () => {})
+  }, () => {}, 240_000, () => time)
   idle.arm()
+  assert.equal(scheduled.at(-1).ms, 50_000)
+  time = 6_000
   idle.observe('interactionUpdate', 'heartbeat', false)
-  idle.observe('interactionUpdate', 'tokenDelta', false)
+  assert.equal(scheduled.at(-1).ms, 50_000)
+  time = 201_000
+  idle.observe('interactionUpdate', 'heartbeat', false)
+  assert.equal(scheduled.at(-1).ms, 40_000)
   idle.observe('interactionUpdate', 'thinkingDelta', false)
-  assert.equal(scheduled.length, 1)
-  assert.equal(scheduled[0].ms, 50_000)
+  assert.equal(scheduled.at(-1).ms, 40_000)
+  time = 241_000
+  idle.observe('interactionUpdate', 'tokenDelta', false)
+  assert.equal(scheduled.at(-1).ms, 50_000)
+  idle.stop()
   scheduled[0].fn()
-  assert.equal(fired, 'Cursor stopped sending a reply')
+  assert.equal(fired, null)
 })
 
 function rootMessages(blobStore) {

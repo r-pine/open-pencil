@@ -164,3 +164,33 @@ test('loading another page preserves existing node identity and text edits', asy
   )
   expect([...session.graph.getAllNodes()].filter((n) => n.type === 'TEXT')).toHaveLength(5)
 })
+
+test('resuming after a component layer is gone still loads the next page', async () => {
+  await initCodec()
+  const source = new SceneGraph()
+  const component = source.createNode('COMPONENT', source.getPages()[0].id, {
+    name: 'Field',
+    width: 40,
+    height: 20
+  })
+  source.createNode('RECTANGLE', component.id, { width: 40, height: 20 })
+  const placed = source.createInstance(component.id, source.addPage('Placed').id)
+  if (!placed) throw new Error('Missing instance')
+  source.addPage('Later')
+  const bytes = await exportFigFile(source)
+
+  const session = createFigDocumentSession(bytes.buffer as ArrayBuffer)
+  session.loadPage(session.pages[0].id)
+  const checkpoint = session.checkpoint()
+  const loaded = [...session.graph.getAllNodes()].find((node) => node.type === 'COMPONENT')
+  if (!loaded) throw new Error('Missing loaded component')
+  session.graph.deleteNode(loaded.id)
+  const resumed = createFigDocumentSession(
+    bytes.buffer as ArrayBuffer,
+    {},
+    { graph: session.graph, checkpoint }
+  )
+  const later = resumed.pages.find((page) => page.name === 'Later')
+  if (!later) throw new Error('Missing later page')
+  expect(() => resumed.loadPage(later.id)).not.toThrow()
+})

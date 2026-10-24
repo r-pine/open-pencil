@@ -123,15 +123,26 @@ function restoreAssemblyState(
 ): AssemblyState {
   const { graph, checkpoint } = resume
   const components = new Map<string, MaterializedComponentOccurrence>()
+  const sources = new Map(checkpoint.sources)
+  const componentIds = new Map(checkpoint.componentIds)
   for (const [id, entry] of checkpoint.components) {
-    components.set(id, restoreComponentCheckpoint(graph, reader.readComponent(id, options), entry))
+    const component = restoreComponentCheckpoint(graph, reader.readComponent(id, options), entry)
+    if (component) {
+      components.set(id, component)
+      continue
+    }
+    const dropped = new Set([entry.rootId, ...entry.nodes.map((node) => node.nodeId)])
+    for (const [sourceId, graphId] of sources) {
+      if (dropped.has(graphId)) sources.delete(sourceId)
+    }
+    componentIds.delete(id)
   }
   return {
     graph,
     nextImportedId: checkpoint.nextImportedId ?? inferNextImportedId(graph),
     components,
-    sources: new Map(checkpoint.sources),
-    componentIds: new Map(checkpoint.componentIds),
+    sources,
+    componentIds,
     savedSizeNodes: new Set(checkpoint.savedSizeNodeIds)
   }
 }

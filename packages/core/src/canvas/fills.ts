@@ -1,4 +1,4 @@
-import type { Canvas, Image, Paint } from 'canvaskit-wasm'
+import type { Canvas, Image, Paint, Shader } from 'canvaskit-wasm'
 
 import type { SceneNode, SceneGraph, Fill } from '@open-pencil/scene-graph'
 import { invertGradientTransform } from '@open-pencil/scene-graph/gradient'
@@ -281,6 +281,15 @@ function applyPatternFill(
   return true
 }
 
+/**
+ * CanvasKit refuses a gradient whose local matrix cannot be inverted. A line stores 0 on its
+ * flat axis, which would scale that axis to nothing; one pixel keeps the gradient solvable and
+ * does not move a linear ramp that runs along the other axis.
+ */
+function gradientSpan(size: number): number {
+  return Number.isFinite(size) && size > 0 ? size : 1
+}
+
 /** Gradient space to the layer's pixels: Figma's transform maps the other way, so it is inverted. */
 function makeGradientLocalMatrix(
   r: SkiaRenderer,
@@ -289,7 +298,7 @@ function makeGradientLocalMatrix(
   transform: NonNullable<Fill['gradientTransform']>
 ) {
   const t = invertGradientTransform(transform)
-  return r.ck.Matrix.multiply(r.ck.Matrix.scaled(width, height), [
+  return r.ck.Matrix.multiply(r.ck.Matrix.scaled(gradientSpan(width), gradientSpan(height)), [
     t.m00,
     t.m01,
     t.m02,
@@ -332,7 +341,12 @@ export function applyGradientFill(
   const h = node.height
 
   /** The paint keeps its own reference, so the caller's handle has to go or WASM memory grows. */
-  const setShader = (shader: ReturnType<typeof makeDiamondGradient>) => {
+  const setShader = (shader: Shader | null) => {
+    if (!shader) {
+      const fallback = colors[0]
+      if (fallback) paint.setColor(fallback)
+      return
+    }
     try {
       paint.setShader(shader)
     } finally {
@@ -454,6 +468,7 @@ function setImageShader(
           r.ck.MipmapMode.Linear,
           localMatrix
         )
+  if (!shader) return false
   try {
     paint.setShader(shader)
   } finally {

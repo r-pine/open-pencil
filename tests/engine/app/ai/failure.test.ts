@@ -5,6 +5,8 @@ import { APICallError, StreamProviderError } from 'ai'
 import {
   classifyAIChatError,
   classifyAIChatFinish,
+  finalizeStallError,
+  isCursorReplyStall,
   isInsufficientCreditError
 } from '@/app/ai/chat/failure'
 import { CursorEventStreamStallError } from '@/app/ai/providers/cursor/event-stream'
@@ -69,6 +71,23 @@ describe('AI chat failures', () => {
     expect(classifyAIChatError(new Error('Invalid API key.')).reason).toBe('authentication')
     expect(classifyAIChatError(new Error('Failed to fetch provider')).reason).toBe('network')
     expect(classifyAIChatError(new Error('Provider unavailable')).reason).toBe('request-failed')
+  })
+
+  test('a cursor stall frame stays final when it is a plain stream object', () => {
+    const frame = {
+      message: 'Cursor stopped sending a reply',
+      statusCode: 500,
+      isRetryable: true
+    }
+    expect(isCursorReplyStall(frame)).toBe(true)
+    expect(classifyAIChatError(frame).reason).toBe('stalled')
+    expect(finalizeStallError(frame)).toBe(frame)
+    const retry = {
+      name: 'AI_RetryError',
+      message: 'Failed after 2 attempts',
+      lastError: frame
+    }
+    expect(isCursorReplyStall(retry)).toBe(true)
   })
 
   test('classifies a cursor stream that never sent a data event', () => {

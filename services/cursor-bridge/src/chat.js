@@ -834,33 +834,79 @@ function sendMcpResults(entry, toolResults) {
 }
 
 const IDLE_MS = 50_000
+/** Heartbeats may keep a live run this long after the last real step. A quiet socket still ends. */
+const IDLE_CAP_MS = 240_000
 export const IDLE_REPLY_ERROR = 'Cursor stopped sending a reply'
 
+const PROGRESS_UPDATES = new Set([
+  'partialToolCall',
+  'toolCallDelta',
+  'toolCallStarted',
+  'toolCallCompleted',
+  'tokenDelta',
+  'stepStarted',
+  'stepCompleted',
+  'summary',
+  'summaryStarted',
+  'summaryCompleted',
+  'thinkingCompleted',
+  'shellOutputDelta'
+])
+
 export function countsAsAgentOutput(messageCase, updateCase, hasText) {
+  if (
+    messageCase === 'kvServerMessage' ||
+    messageCase === 'execServerMessage' ||
+    messageCase === 'conversationCheckpointUpdate'
+  ) {
+    return true
+  }
   if (messageCase !== 'interactionUpdate') return false
   if (updateCase === 'textDelta' || updateCase === 'thinkingDelta') return Boolean(hasText)
-  return updateCase === 'partialToolCall' || updateCase === 'toolCallDelta' || updateCase === 'toolCallStarted'
+  return PROGRESS_UPDATES.has(updateCase)
 }
 
-export function createReplyIdle(idleMs, onIdle, schedule = setTimeout, cancel = clearTimeout) {
+/** Server heartbeats mean the run is still open. They do not count as a new step. */
+export function countsAsAgentLiveness(messageCase, updateCase) {
+  return messageCase === 'interactionUpdate' && updateCase === 'heartbeat'
+}
+
+export function createReplyIdle(
+  idleMs,
+  onIdle,
+  schedule = setTimeout,
+  cancel = clearTimeout,
+  capMs = IDLE_CAP_MS,
+  now = Date.now
+) {
   let timer = null
   let stopped = false
-  const arm = () => {
+  let lastProgress = 0
+  const arm = (progress) => {
     if (stopped) return
+    const time = now()
+    if (progress || lastProgress === 0) lastProgress = time
     cancel(timer)
+    const deadline = progress
+      ? time + idleMs
+      : Math.min(time + idleMs, lastProgress + capMs)
     timer = schedule(() => {
       if (!stopped) onIdle()
-    }, idleMs)
+    }, Math.max(0, deadline - time))
   }
   return {
-    arm,
+    arm() {
+      arm(true)
+    },
     stop() {
       stopped = true
       cancel(timer)
       timer = null
     },
     observe(messageCase, updateCase, hasText) {
-      if (!stopped && countsAsAgentOutput(messageCase, updateCase, hasText)) arm()
+      if (stopped) return
+      if (countsAsAgentOutput(messageCase, updateCase, hasText)) arm(true)
+      else if (countsAsAgentLiveness(messageCase, updateCase)) arm(false)
     }
   }
 }
@@ -896,6 +942,7 @@ function attachStream(entry, modelId, req, res, stream) {
   entry.detach?.()
   ensureHeartbeat(entry)
   let started = false
+  let sentData = false
   const beginStream = () => {
     if (started || !stream || res.headersSent) return
     started = true
@@ -908,11 +955,13 @@ function attachStream(entry, modelId, req, res, stream) {
   }
   const ping = setInterval(() => {
     if (!stream || closed || paused) return
+    // Opens the response and, while Cursor is still working, extends the client's wait.
     beginStream()
     res.write(': ping\n\n')
   }, 15_000)
   const send = (data) => {
     if (closed || !stream) return
+    sentData = true
     beginStream()
     res.write(`data: ${JSON.stringify(data)}\n\n`)
   }
@@ -954,7 +1003,15 @@ function attachStream(entry, modelId, req, res, stream) {
     clearInterval(ping)
     activeBridges.delete(entry.key)
     cancelBridge(entry)
-    if (!res.headersSent && !stream) {
+    if (res.headersSent && stream && !res.writableEnded) {
+      try {
+        res.write(`data: ${JSON.stringify({ error: { message: IDLE_REPLY_ERROR } })}\n\n`)
+        res.write('data: [DONE]\n\n')
+        res.end()
+      } catch {
+        // The client already dropped the socket.
+      }
+    } else if (!res.headersSent && !stream) {
       res.writeHead(499, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ error: { message: 'Client closed request' } }))
     }
@@ -994,6 +1051,13 @@ function attachStream(entry, modelId, req, res, stream) {
         send(chunk({ content: update.value.text }))
       } else if (update?.case === 'thinkingDelta' && update.value?.text) {
         send(chunk({ reasoning_content: update.value.text }))
+      } else if (update?.case === 'turnEnded' && !paused && !closed) {
+        // The agent socket stays open after the turn. Without this the client
+        // only sees pings until it gives up.
+        if (chunks.length || sentData) finish(200)
+        else finish(504, { error: { message: IDLE_REPLY_ERROR } })
+        activeBridges.delete(entry.key)
+        cancelBridge(entry)
       }
       return
     }
@@ -1038,11 +1102,21 @@ function attachStream(entry, modelId, req, res, stream) {
       if (payload?.error) {
         const message = publicError(payload.error)
         console.error(`[cursor-bridge] upstream error ${message}`)
-        // Cursor application errors are not an upstream gateway failure.
-        finish(400, { error: { message, type: 'upstream_error' } })
+        // A run that dies before any text is the same stop as the idle timer.
+        // 400 keeps the SDK from retrying it into a second, harder failure.
+        const stalled = !chunks.length && !paused
+        finish(400, {
+          error: { message: stalled ? IDLE_REPLY_ERROR : message, type: 'upstream_error' }
+        })
       }
     } catch {
-      // An end frame without JSON is a normal close.
+      // An end frame without JSON is a normal close. Finish it: a bidi run does
+      // not always drop the socket, and a ping-only body is not a completion.
+      if (paused || closed) return
+      if (chunks.length || sentData) finish(200)
+      else finish(504, { error: { message: IDLE_REPLY_ERROR } })
+      activeBridges.delete(entry.key)
+      cancelBridge(entry)
     }
   }))
 

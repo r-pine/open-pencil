@@ -687,11 +687,14 @@ function drawVectorPathStrokes(
     r.strokePaint.setStrokeJoin(getStrokeJoinEntity(r, stroke.join ?? 'MITER'))
     r.strokePaint.setStrokeMiter(miterLimit)
     const effect = r.ck.PathEffect.MakeDash(dash, 0)
-    r.strokePaint.setPathEffect(effect)
-    for (const vp of vectorPaths) canvas.drawPath(vp, r.strokePaint)
-    r.strokePaint.setPathEffect(null)
-    effect.delete()
-    return
+    // A zero or negative interval is not a dash CanvasKit can build. The shaft still draws solid.
+    if (effect) {
+      r.strokePaint.setPathEffect(effect)
+      for (const vp of vectorPaths) canvas.drawPath(vp, r.strokePaint)
+      r.strokePaint.setPathEffect(null)
+      effect.delete()
+      return
+    }
   }
   const strokeOpts = {
     width: stroke.weight,

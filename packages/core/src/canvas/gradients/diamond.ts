@@ -16,7 +16,7 @@ export function makeDiamondGradient(
   colors: Float32Array[],
   positions: number[],
   localMatrix: InputMatrix
-): Shader {
+): Shader | null {
   if (!r.diamondGradientEffect) {
     let error = ''
     const effect = r.ck.RuntimeEffect.Make(DIAMOND_GRADIENT, (message) => {
@@ -32,6 +32,7 @@ export function makeDiamondGradient(
     positions,
     r.ck.TileMode.Clamp
   )
+  if (!ramp) return null
   try {
     return r.diamondGradientEffect.makeShaderWithChildren([], [ramp], localMatrix)
   } finally {

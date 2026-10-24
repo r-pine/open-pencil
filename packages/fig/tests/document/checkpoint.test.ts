@@ -26,6 +26,12 @@ function setup() {
   return { graph, occurrence, materialized, checkpoint }
 }
 
+test('a component removed after the checkpoint resumes as absent', () => {
+  const { graph, occurrence, checkpoint } = setup()
+  graph.deleteNode(checkpoint.rootId)
+  expect(restoreComponentCheckpoint(graph, occurrence, checkpoint)).toBeNull()
+})
+
 test('compact checkpoint reconnects source paths without overwriting live edits', () => {
   const { graph, occurrence, materialized, checkpoint } = setup()
   const child = graph.getChildren(materialized.root.id)[0]

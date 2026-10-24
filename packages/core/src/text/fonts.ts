@@ -51,6 +51,7 @@ const BUNDLED_FONTS: Record<string, string> = {
   'Verdana|Italic': '/Verdana-Italic.ttf',
   'Verdana|Regular Italic': '/Verdana-Italic.ttf',
   'Arial|Regular': '/Arial-Regular.ttf',
+  'Igra Sans|Regular': '/IgraSans-Regular.otf',
   'Arial Black|Black': '/ArialBlack-Black.ttf',
   'Arial Black|Regular': '/ArialBlack-Black.ttf',
   'Noto Color Emoji|Regular': '/NotoColorEmoji-Regular.ttf'
